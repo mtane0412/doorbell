@@ -123,7 +123,7 @@ KV は使わない。KV にはアトミックな更新がなく、他ロケー�
 | トピック別書き込みシークレット（`TOPIC_WRITE_SECRETS`） | 外部の producer 側と Worker のシークレット | `{"トピック名":"シークレット"}` 形式。 producer ごとに別値。漏れたらそのトピックだけ失効。Worker 内蔵 producer には不要 |
 | トピック登録（`TOPICS`） | Worker のシークレット | `[{"name":"トピック名","id":"opaque ID"}]` 形式。対応をリポジトリから読めないようにする |
 | 読み取りトークン（`READ_TOKEN`） | Worker のシークレット＋ Muse の安全登録（コネクタ） | Muse 自身は値を見ない |
-| `signal_key`（`SIGNAL_KEY`） | Worker のシークレット＋ Hook の Bash スクリプト内の定数 | signal の URL に使う値であり、認証情報として扱わない。漏れたら値を差し替える |
+| `signal_key`（`SIGNAL_KEY`） | Worker のシークレット＋ Hook の Bash スクリプト内の定数 | signal を読むためだけの URL に使う値であり、認証情報として扱わない。漏れたら値を差し替える |
 | Discord ボットトークン（`DISCORD_BOT_TOKEN`） | Worker のシークレット | doorbell のペイロードには載せない |
 | 監視チャンネルIDと自分のボットのユーザーID（`DISCORD_CHANNEL_ID`、`DISCORD_BOT_USER_ID`） | Worker のシークレット | 認証情報ではないが、リポジトリに置かない |
 | Cosense の Personal Access Token（`COSENSE_PAT`） | Worker のシークレット | doorbell のペイロードには載せない |
@@ -175,7 +175,7 @@ KV は使わない。KV にはアトミックな更新がなく、他ロケー�
 | Discord producer の置き場所 | Workers 内蔵 Cron での REST ポーリング | 常駐プロセスが不要で、自宅基盤の障害に影響されない |
 | 保持件数と保持期間 | 20件・7日 | 本文を持たない設計なので十分である |
 | Hook の確認間隔 | 5分 | 分単位の即時性が必要な用途がない |
-| `signal_key` の保持 | Hook の Bash スクリプト内の定数 | `signal_key` は認証情報ではなく signal の URL に使う値であり、たねハウスが保持可能と確認済み |
+| `signal_key` の保持 | Hook の Bash スクリプト内の定数 | `signal_key` は認証情報ではなく signal を読むためだけの URL に使う値であり、たねハウスが保持可能と確認済み |
 | トピックごとの最短起床間隔 | 15分 | 会話が活発な間の利用枠の消費を抑える |
 | Discord Cron の実行間隔 | 5分 | 静かな状態からの検知遅れは最大約10分（Cron 5分＋Hook 5分）。起床の直後に投稿された場合は、最短起床間隔により次の起床まで約15〜20分かかる |
 | ドメイン | `doorbell.mtane0412.workers.dev` | 独自ドメインなしで開始する。`mtane0412` の部分は Cloudflare アカウントの `workers.dev` サブドメインに合わせる |
