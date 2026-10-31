@@ -36,7 +36,7 @@ async function pageResponse(bridge: Bridge, status: number, notice?: Notice): Pr
 			"Content-Type": "text/html; charset=utf-8",
 			"Content-Security-Policy": `default-src 'none'; style-src 'nonce-${nonce}'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'`,
 			"X-Content-Type-Options": "nosniff",
-			"Referrer-Policy": "no-referrer",
+			"Referrer-Policy": "same-origin",
 			"Cache-Control": "no-store",
 		},
 	});
