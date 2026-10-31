@@ -1,7 +1,7 @@
 /**
  * Discord Cron の振る舞いを検証するテスト
  *
- * docs/design.md の「Discord 生産者」の仕様に対応する。外部 API である Discord の fetch だけをモックする。
+ * docs/design.md の「Discord producer」の仕様に対応する。外部 API である Discord の fetch だけをモックする。
  */
 import { env } from "cloudflare:workers";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";

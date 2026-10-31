@@ -79,19 +79,19 @@ describe("POST /events/{topic}", () => {
 		expect(response.status).toBe(404);
 	});
 
-	it("本文が 4 KB を超えるなら 413 を返す", async () => {
+	it("body が 4 KB を超えるなら 413 を返す", async () => {
 		const response = await postEvent("あ".repeat(2000));
 
 		expect(response.status).toBe(413);
 	});
 
 	it.each([
-		["JSON でない本文", "これはJSONではありません"],
-		["summary がない本文", JSON.stringify({ kind: "test.event" })],
-		["summary が空の本文", JSON.stringify({ kind: "test.event", summary: "" })],
-		["kind がない本文", JSON.stringify({ summary: "種別なし" })],
-		["ref が文字列でない本文", JSON.stringify({ kind: "test.event", summary: "参照不正", ref: 1 })],
-		["data がオブジェクトでない本文", JSON.stringify({ kind: "test.event", summary: "不正", data: [1] })],
+		["JSON でない body", "これはJSONではありません"],
+		["summary がない body", JSON.stringify({ kind: "test.event" })],
+		["summary が空の body", JSON.stringify({ kind: "test.event", summary: "" })],
+		["kind がない body", JSON.stringify({ summary: "種別なし" })],
+		["ref が文字列でない body", JSON.stringify({ kind: "test.event", summary: "参照不正", ref: 1 })],
+		["data がオブジェクトでない body", JSON.stringify({ kind: "test.event", summary: "不正", data: [1] })],
 	])("%s なら 400 を返す", async (_label, body) => {
 		const response = await request(`/events/${WRITABLE_TOPIC}`, {
 			method: "POST",
@@ -104,7 +104,7 @@ describe("POST /events/{topic}", () => {
 });
 
 describe("GET /signal/{signal_key}", () => {
-	it("全トピックの不透明ID・連番・更新時刻だけを返し、トピック名と内容を含まない", async () => {
+	it("全トピックの opaque ID・連番・更新時刻だけを返し、トピック名と内容を含まない", async () => {
 		await postEvent("秘密にしたい要約");
 
 		const response = await request(SIGNAL_PATH);

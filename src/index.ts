@@ -1,7 +1,7 @@
 /**
  * doorbell Worker のエントリーポイント
  *
- * 「合図（認証なし・内容なし）」と「実データ（認証あり）」を分離して中継する。
+ * 「signal（認証なし・内容なし）」と「実データ（認証あり）」を分離して中継する。
  * 仕様は docs/design.md を参照すること。
  */
 import { hasValidBearer, secretsMatch } from "./auth.ts";
@@ -12,7 +12,7 @@ import { EventBridge, type EventInput } from "./event-bridge.ts";
 
 export { EventBridge };
 
-/** POST 本文のサイズ上限 */
+/** POST body のサイズ上限 */
 const MAX_EVENT_BYTES = 4 * 1024;
 /** Durable Object は全体で1個だけ使う */
 const BRIDGE_NAME = "main";
@@ -31,13 +31,13 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-/** POST 本文をイベントへ解析する。不正なら null */
+/** POST body をイベントへ解析する。不正なら null */
 function parseEventInput(body: ArrayBuffer): EventInput | null {
 	let parsed: unknown;
 	try {
 		parsed = JSON.parse(new TextDecoder().decode(body));
 	} catch {
-		// 本文の JSON 不正は呼び出し側の誤りであり、400 として返すため例外を伝播しない
+		// body の JSON 不正は呼び出し側の誤りであり、400 として返すため例外を伝播しない
 		return null;
 	}
 	if (!isRecord(parsed)) {
@@ -126,7 +126,7 @@ export default {
 		const results = await Promise.allSettled([pollDiscord(env, bridge), pollCosense(env, bridge)]);
 		const reasons = results.flatMap((result) => (result.status === "rejected" ? [result.reason] : []));
 		if (reasons.length > 0) {
-			throw new AggregateError(reasons, "生産者の確認に失敗しました");
+			throw new AggregateError(reasons, "producer の確認に失敗しました");
 		}
 	},
 } satisfies ExportedHandler<Env>;

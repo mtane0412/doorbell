@@ -11,7 +11,7 @@ const MAX_EVENTS_PER_TOPIC = 20;
 /** イベントの保持期間 */
 const EVENT_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 
-/** 生産者が渡すイベント。ts と seq は Durable Object が付与する */
+/** producer が渡すイベント。ts と seq は Durable Object が付与する */
 export type EventInput = {
 	kind: string;
 	summary: string;
@@ -120,7 +120,7 @@ export class EventBridge extends DurableObject<Env> {
 			}));
 	}
 
-	/** Worker 内蔵の生産者が最後に確認した位置を返す。未記録なら null */
+	/** Worker 内蔵 producer が最後に確認した位置を返す。未記録なら null */
 	async getProducerCursor(producer: string): Promise<string | null> {
 		return (
 			this.ctx.storage.sql
@@ -130,7 +130,7 @@ export class EventBridge extends DurableObject<Env> {
 	}
 
 	/**
-	 * 生産者の確認位置の更新とイベントの追加を、1つのトランザクションで行う
+	 * producer の確認位置の更新とイベントの追加を、1つのトランザクションで行う
 	 *
 	 * 片方だけが成功すると、イベントの重複や取りこぼしになるためである。
 	 *
