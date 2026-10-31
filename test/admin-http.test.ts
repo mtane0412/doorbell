@@ -197,6 +197,8 @@ describe("画面", () => {
 		expect(csp).toContain("form-action 'self'");
 		expect(csp).toContain("frame-ancestors 'none'");
 		expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+		// no-referrer にするとブラウザはフォームの POST で Origin: null を送り、Origin の検証で自分の操作を拒否してしまう
+		expect(response.headers.get("referrer-policy")).toBe("same-origin");
 		expect(response.headers.get("cache-control")).toBe("no-store");
 	});
 

@@ -141,7 +141,7 @@ Worker 内蔵 producer しか使わないトピックは、`TOPIC_WRITE_SECRETS`
 デプロイの手順は次のとおりです。
 
 1. リポジトリのルートで `npm run deploy` を実行し、`doorbell` を先にデプロイします。
-2. `admin/` で `npm install` と `npx cf deploy` を実行します。シークレットが未設定の間は、すべてのリクエストが失敗し、画面は開けません。
+2. `admin/` で `npm install` と `npx cf deploy` を実行します。Worker がまだない初回は、シークレットを先に登録できないため `npx cf deploy --secrets-file <ファイル>` を使います。`ACCESS_*` の値は手順3の後でないと分からないので、ファイルには `ACCESS_TEAM_DOMAIN` を `https://access-not-configured.invalid` のような解決できない URL、`ACCESS_AUD` を仮の文字列として書きます。この値の間は、すべてのリクエストが拒否または失敗し、画面は開けません。
 3. ダッシュボードの **Workers & Pages** で `doorbell-admin` を開き、**Settings** > **Domains & Routes** で `workers.dev` の **Enable Cloudflare Access** を有効にします。Preview URL が有効な場合は、同様に保護するか無効にします。
 4. 表示された値を、`admin/` でシークレットとして登録します。
 
