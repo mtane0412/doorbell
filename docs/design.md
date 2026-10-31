@@ -2,7 +2,8 @@
 
 作成：2026-10-31（たねハウス）
 改訂：2026-10-31（KV から Durable Object への変更、連番の永続化、ループ防止、既読位置の分離、`/signal` の匿名化）
-状態：Worker 本体と Discord Cron は `https://doorbell.mtane0412.workers.dev` で稼働中。Hook とコネクタは未確認。
+改訂：2026-11-01（複数の監視対象と設定管理ページの設計を追加）
+状態：Worker 本体と Discord Cron は `https://doorbell.mtane0412.workers.dev` で稼働中。Hook とコネクタは未確認。「複数の監視対象と設定管理（未実装）」の節は設計のみで、それ以外の節が現在の実装を表す。
 
 ## 目的
 
@@ -166,6 +167,103 @@ KV は使わない。KV にはアトミックな更新がなく、他ロケー�
 - エージェントが途中で失敗した場合、処理済みの連番は進まない。ただし再度起きるのは次のイベント発生時である。
 - 多重起動は通知済みの連番で防ぎ、重複処理は処理済みの連番で防ぐ。
 
+## 複数の監視対象と設定管理（未実装）
+
+Discord の複数チャンネルと Cosense の複数プロジェクトを監視できるようにし、監視対象とトピックを管理ページから変更できるようにする。実装が完了した時点で、この節の内容を各節へ統合し、「シークレットの置き場所」を更新する。
+
+本節では、Discord の1チャンネルまたは Cosense の1プロジェクトを「監視対象」と呼ぶ。
+
+### 設定の置き場所
+
+| 値 | 置き場所 | 備考 |
+|---|---|---|
+| `DISCORD_BOT_TOKEN`、`COSENSE_PAT`、`READ_TOKEN`、`SIGNAL_KEY` | Worker のシークレット（現状のまま） | 管理ページでは扱わない |
+| トピック名と opaque ID（現 `TOPICS`） | Durable Object の `topics` | リポジトリには置かない |
+| チャンネルID、プロジェクト名、除外するユーザーID（現 `DISCORD_CHANNEL_ID`、`DISCORD_BOT_USER_ID`、`COSENSE_PROJECT`、`COSENSE_BOT_USER_ID`） | Durable Object の `sources` | リポジトリには置かない |
+| トピック別書き込みシークレット（現 `TOPIC_WRITE_SECRETS`） | Durable Object の `topics` に SHA-256 ハッシュだけを保存する | 新規発行の値は管理ページで生成し、発行時に一度だけ表示する |
+
+### データモデル
+
+監視対象1件につき、トピックを1つ割り当てる。連番と最短起床間隔がトピック単位であるため、この対応なら既存の仕組みをそのまま使える。複数の監視対象を1つのトピックにまとめる機能は作らない。
+
+```sql
+CREATE TABLE topics (
+  name TEXT PRIMARY KEY,
+  opaque_id TEXT NOT NULL UNIQUE,
+  seq INTEGER NOT NULL,
+  updated_at_ms INTEGER,           -- イベントが一度もなければ NULL
+  write_secret_hash TEXT,          -- NULL なら外部から書き込めない
+  deleted_at_ms INTEGER            -- NULL 以外なら論理削除済み
+);
+
+CREATE TABLE sources (
+  id TEXT PRIMARY KEY,             -- producer_state.producer と同じ値を使う
+  type TEXT NOT NULL CHECK (type IN ('discord', 'cosense')),
+  target TEXT NOT NULL,            -- チャンネルID またはプロジェクト名
+  excluded_user_id TEXT NOT NULL,
+  topic TEXT NOT NULL UNIQUE REFERENCES topics(name),
+  enabled INTEGER NOT NULL,
+  last_error TEXT,                 -- API のステータスコード程度だけを記録し、認証情報と応答本文は含めない
+  UNIQUE (type, target)
+);
+```
+
+既存の `topics` は `updated_at_ms` が `NOT NULL` であり、SQLite の `ALTER TABLE` では `UNIQUE` 列を追加できない。したがって、移行時は新しい `topics` を作成して行を移し、1つのトランザクションで置き換える。
+
+### 操作の規則
+
+| 操作 | 動作 | 理由 |
+|---|---|---|
+| 監視対象の追加 | `EventBridge` が API を1回呼び、成功した場合だけ保存する | 入力の誤りと権限不足を追加時に検出するため |
+| 監視対象の無効化 | Cron の確認対象から外す。トピックは `/signal` に残す | 一時停止と削除を区別するため |
+| 無効化からの再開 | 確認位置を削除し、初回と同じ扱いにする | 停止中の更新で不要な起床を起こさないため |
+| 監視先の変更 | 不可とする。削除と追加で行う | 別の監視先に古い確認位置を適用しないため |
+| 監視対象の削除 | `sources` と `producer_state` の行を削除し、`topics` の行を論理削除する | 連番を保持するため |
+| トピックの削除 | 論理削除とし、同じ名前の再利用を禁止する | 連番の巻き戻りを防ぐため |
+
+論理削除されたトピックは `/signal` に出さず、`POST /events/{topic}` と `GET /events/{topic}` は 404 を返す。
+
+### Cron
+
+- 有効な監視対象ごとに確認を実行する。1件の失敗で他の監視対象の確認を止めず、失敗があれば実行の最後に例外を投げる。
+- `last_error` は値が変わった場合だけ書き込む。
+- 監視対象と確認位置は、1回の RPC でまとめて取得する。
+- 監視対象の上限は暫定で10件とする。Workers Free の Cron の上限は CPU 時間 10 ms、外部サブリクエスト50件である。監視対象を増やした時点で CPU 時間を再測定し、上限を見直す。
+- イベントの `data` に Discord は `channel_id`、Cosense は `project` を追加する。本文とタイトルは引き続き載せない。
+
+### 管理ページ
+
+- 別の Worker `doorbell-admin` として実装し、Worker 全体を Cloudflare Access で保護する。
+- `doorbell` に `/admin` を追加する案は採用しない。workers.dev 向けのワンクリック Access は URL 単位の保護であり、`/signal` と `/events` だけを除外する方法を確認できなかったためである。Hook は認証情報を持てないため、これらの経路を保護すると Hook が動かなくなる。
+- `doorbell-admin` は `Cf-Access-Jwt-Assertion` を検証し、検証に失敗したリクエストを拒否する。
+- `doorbell-admin` は `EventBridge` の Durable Object バインディングだけを持ち、`DISCORD_BOT_TOKEN` と `COSENSE_PAT` を持たない。
+- 画面はサーバーで生成する HTML とフォームだけで構成し、フレームワークを使わない。POST では `Origin` を検証し、CSP を設定する。
+- 一覧には名前、種類、監視先、連番、最終更新時刻、直近のエラーを表示する。
+- 操作は、監視対象の追加・無効化・再開・削除、外部トピックの作成・削除、書き込みシークレットの再発行とする。
+- `opaque_id` はサーバーで生成し、一覧からコピーできるようにする。
+
+### 移行
+
+`opaque_id`、トピック名、連番、確認位置をすべて引き継ぐ。Hook とエージェントの設定変更を不要にするためである。
+
+1. Durable Object のスキーマ移行で、既存のシークレットの値を一度だけ `topics` と `sources` に取り込む。`sources.id` は `discord` と `cosense` とし、`producer_state` は書き換えない。値が不正な場合は例外を投げ、移行を完了させない。
+2. 同じデプロイで、読み取り先を Durable Object に切り替える。切り替えの空白時間は発生しない。
+3. 動作を確認した後、取り込み処理と不要になったシークレットを別の PR で削除する。
+
+実行時にシークレットの値へ戻るフォールバックは作らない。
+
+PR は次の順に分ける。
+
+1. Durable Object への移行と複数の監視対象への対応
+2. `doorbell-admin` の追加
+3. 旧シークレットの削除と `README.md`、本書の更新
+
+### Muse 側への影響
+
+- 追加したトピックは、規則を追加するまで要約の報告だけになる。管理ページでの追加後に、たねハウスの規則ファイルへの追加が必要である。
+- 起床間隔はトピック単位であるため、監視対象が増えると起床回数も増える可能性がある。
+- 削除したトピックは `/signal` から消える。Hook は、未知の ID と消えた ID を受けてもエラーにならない必要がある。
+
 ## 決定事項
 
 | 項目 | 決定 | 理由 |
@@ -179,10 +277,18 @@ KV は使わない。KV にはアトミックな更新がなく、他ロケー�
 | トピックごとの最短起床間隔 | 15分 | 会話が活発な間の利用枠の消費を抑える |
 | Discord Cron の実行間隔 | 5分 | 静かな状態からの検知遅れは最大約10分（Cron 5分＋Hook 5分）。起床の直後に投稿された場合は、最短起床間隔により次の起床まで約15〜20分かかる |
 | ドメイン | `doorbell.mtane0412.workers.dev` | 独自ドメインなしで開始する。`mtane0412` の部分は Cloudflare アカウントの `workers.dev` サブドメインに合わせる |
+| 監視対象とトピックの対応（未実装） | 1対1 | 連番と最短起床間隔がトピック単位であるため |
+| 監視対象の設定の置き場所（未実装） | Durable Object | シークレットは今の値を読めず、JSON の全体上書きしかできないため |
+| 認証情報の置き場所（未実装） | シークレットのまま | 管理ページの侵害時にトークンが漏れないようにするため |
+| 管理ページの置き場所（未実装） | 別の Worker `doorbell-admin` と Cloudflare Access | `/signal` と `/events` を保護せず、公開側の Worker に管理用の入口を増やさないため |
 
 ## 未決定事項
 
-- なし
+次の3点は、設計の前提であり未検証である。
+
+- 1つの `COSENSE_PAT` で複数のプロジェクトを読めるか。PR 1 の前に実際の PAT で確認する。読めない場合は、`sources` に認証情報の名前を持つ列を追加する。
+- 監視するすべての Discord チャンネルに、1つのボットを招待できるか。別のボットが必要な場合は、同じ列で対応する。
+- `cf` の設定で、別の Worker から `EventBridge` を参照し、2つの Worker をデプロイできるか。PR 2 の最初に確認する。できない場合は、独自ドメインでパス単位の Cloudflare Access を使う案に切り替える。
 
 ## 実測結果
 
