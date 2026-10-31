@@ -295,6 +295,7 @@ PR は次の順に分ける。
 
 - 2026-10-31 の本番で、Cron の CPU 時間は Worker が最大 1〜2 ms、Durable Object が最大 2 ms であり、Workers Free の上限（10 ms）に収まった。
 - `workers.dev` サブドメインは `mtane0412` であった。
+- 2026-11-01 00:45（JST）の本番で、監視対象2件・新着なしの Cron の CPU 時間は、Worker が 2 ms、Durable Object の `getPollSources` が 0 ms であった。測定は `wrangler tail` の1回分であり、新着の書き込みを含まない。
 - 2026-11-01 に、1つの `COSENSE_PAT` で複数のプロジェクトを読めること、監視するすべての Discord チャンネルに1つのボットを招待できることを、たねが確認した。したがって、`sources` に認証情報の名前を持つ列は追加しない。
 
 ## 実装分担
