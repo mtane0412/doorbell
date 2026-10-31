@@ -5,6 +5,7 @@
  */
 import { exports, env } from "cloudflare:workers";
 import { runInDurableObject } from "cloudflare:test";
+import type { EventBridge } from "../src/event-bridge.ts";
 
 export const WRITABLE_TOPIC = "mac-script";
 export const INTERNAL_TOPIC = "discord-ietter";
@@ -16,7 +17,9 @@ const BASE_URL = "https://doorbell.test";
 
 /** Durable Object の取得（本番と同じ1個のインスタンス） */
 export function getBridge() {
-	return env.EVENT_BRIDGE.getByName("main");
+	// 同じ Worker の Durable Object を名前で参照する設定では、cf の型生成がクラスの型を推論できない
+	const namespace = env.EVENT_BRIDGE as DurableObjectNamespace<EventBridge>;
+	return namespace.getByName("main");
 }
 
 /** Bearer 認証のヘッダーを作る */

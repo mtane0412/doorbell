@@ -116,6 +116,7 @@ describe("GET /signal/{signal_key}", () => {
 		expect(body.topics).toEqual([
 			{ id: "topic-id-discord", seq: 0, updated_at: null },
 			{ id: "topic-id-mac", seq: 1, updated_at: expect.any(String) },
+			{ id: "topic-id-cosense", seq: 0, updated_at: null },
 		]);
 		expect(text).not.toContain(WRITABLE_TOPIC);
 		expect(text).not.toContain("秘密にしたい要約");

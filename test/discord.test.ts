@@ -4,10 +4,9 @@
  * docs/design.md の「Discord 生産者」の仕様に対応する。外部 API である Discord の fetch だけをモックする。
  */
 import { env } from "cloudflare:workers";
-import { createScheduledController } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import worker from "../src/index.ts";
-import { INTERNAL_TOPIC, readEvents, resetBridge } from "./helpers.ts";
+import { pollDiscord } from "../src/discord.ts";
+import { getBridge, INTERNAL_TOPIC, readEvents, resetBridge } from "./helpers.ts";
 
 const BOT_USER_ID = "9999";
 const OTHER_USER_ID = "1234";
@@ -20,7 +19,7 @@ function mockDiscordMessages(messages: DiscordMessage[]) {
 }
 
 async function runCron(): Promise<void> {
-	await worker.scheduled(createScheduledController(), env);
+	await pollDiscord(env, getBridge());
 }
 
 async function readDiscordEvents() {

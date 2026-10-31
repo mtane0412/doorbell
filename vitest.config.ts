@@ -20,6 +20,7 @@ export default defineConfig({
 					TOPICS: JSON.stringify([
 						{ name: "discord-ietter", id: "topic-id-discord" },
 						{ name: "mac-script", id: "topic-id-mac" },
+						{ name: "cosense", id: "topic-id-cosense" },
 					]),
 					TOPIC_WRITE_SECRETS: JSON.stringify({ "mac-script": "test-write-secret" }),
 					READ_TOKEN: "test-read-token",
@@ -27,6 +28,9 @@ export default defineConfig({
 					DISCORD_BOT_TOKEN: "test-discord-bot-token",
 					DISCORD_CHANNEL_ID: "1000",
 					DISCORD_BOT_USER_ID: "9999",
+					COSENSE_PAT: "test-cosense-pat",
+					COSENSE_PROJECT: "test-project",
+					COSENSE_BOT_USER_ID: "user-id-tanehouse",
 				},
 			},
 		}),

@@ -5,7 +5,7 @@
 doorbell は「合図（認証なし・内容なし）」と「実データ（認証あり）」を分離します。認証情報を持てない軽量な Hook は合図だけを見張り、連番が進んだ時だけエージェントを起こします。起きたエージェントは、読み取りトークンを使って実データを取得します。
 
 ```
-外部の生産者 ── POST /events/{topic} ──▶ doorbell ◀── Cron（Discord REST を5分おきに確認）
+外部の生産者 ── POST /events/{topic} ──▶ doorbell ◀── Cron（Discord と Cosense の REST を5分おきに確認）
                                           │
                                           ├─ Durable Object（連番とイベントの保管）
                                           ├─ GET /signal/{signal_key} ◀── Hook（変化の検知）
@@ -83,6 +83,15 @@ Worker は Cron で5分おきに監視チャンネルを確認し、新着をト
 - 初回は過去の投稿を通知せず、最新メッセージIDだけを記録します。
 - Discord API が失敗した場合は確認位置を進めないため、次回の Cron で再確認します。
 
+## Cosense の更新検知
+
+Worker は同じ Cron で `COSENSE_PROJECT` のページ一覧を確認し、更新をトピック `cosense` のイベントとして記録します。イベントには件数と最新のページIDだけを載せ、タイトルと本文は載せません。
+
+- `COSENSE_BOT_USER_ID` のユーザーが最後に更新したページは除外します。エージェントの編集で起床が連鎖することを防ぐためです。
+- 初回は既存のページを通知せず、最終更新時刻だけを記録します。
+- Cosense API が失敗した場合は確認位置を進めないため、次回の Cron で再確認します。Discord と Cosense は互いの失敗の影響を受けません。
+- API は最終更新者しか返さないため、人の更新の直後にボットが同じページを更新すると、人の更新は検知できません。ページの削除も検知しません。
+
 ## セットアップ
 
 ```bash
@@ -102,7 +111,7 @@ npm install
 
 ## シークレット
 
-設定値はすべて Worker のシークレットとして登録し、リポジトリには置きません。登録には `cf workers secrets update <名前>` を使います。
+設定値はすべて Worker のシークレットとして登録し、リポジトリには置きません。登録には `cf workers secrets update <名前> --worker doorbell` を使います。
 
 | 名前 | 内容 |
 |---|---|
@@ -113,6 +122,9 @@ npm install
 | `DISCORD_BOT_TOKEN` | Discord ボットのトークン |
 | `DISCORD_CHANNEL_ID` | 監視するチャンネルのID |
 | `DISCORD_BOT_USER_ID` | 除外する自分のボットのユーザーID |
+| `COSENSE_PAT` | Cosense の Personal Access Token |
+| `COSENSE_PROJECT` | 監視する Cosense のプロジェクト名 |
+| `COSENSE_BOT_USER_ID` | 除外する自分のボットの Cosense ユーザーID |
 
 Worker 内蔵の生産者しか使わないトピックは、`TOPIC_WRITE_SECRETS` に登録しません。登録がなければ外部から書き込めません。外部の生産者がいない場合の値は `{}` です。
 
@@ -129,6 +141,7 @@ Worker 内蔵の生産者しか使わないトピックは、`TOPIC_WRITE_SECRET
 | `src/index.ts` | HTTP ルーティングと Cron の入口 |
 | `src/event-bridge.ts` | イベントと連番を保管する Durable Object |
 | `src/discord.ts` | Discord の新着を確認する生産者 |
+| `src/cosense.ts` | Cosense のページ更新を確認する生産者 |
 | `src/auth.ts` | シークレットの定数時間比較 |
 | `src/config.ts` | `TOPICS` と `TOPIC_WRITE_SECRETS` の解析 |
 | `cloudflare.config.ts` | Worker、Cron、バインディングの設定 |
