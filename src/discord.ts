@@ -8,7 +8,7 @@ import type { EventBridge, EventInput } from "./event-bridge.ts";
 
 const DISCORD_API_BASE = "https://discord.com/api/v10";
 const DISCORD_PRODUCER = "discord";
-const DISCORD_TOPIC = "discord-katter";
+const DISCORD_TOPIC = "discord-ietter";
 /** Discord API が1回で返せる最大件数。超えた分は次回の Cron で取得する */
 const DISCORD_PAGE_SIZE = 100;
 

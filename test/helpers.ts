@@ -7,7 +7,7 @@ import { exports, env } from "cloudflare:workers";
 import { runInDurableObject } from "cloudflare:test";
 
 export const WRITABLE_TOPIC = "mac-script";
-export const INTERNAL_TOPIC = "discord-katter";
+export const INTERNAL_TOPIC = "discord-ietter";
 export const WRITE_SECRET = "test-write-secret";
 export const READ_TOKEN = "test-read-token";
 export const SIGNAL_PATH = "/signal/test-signal-key";

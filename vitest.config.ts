@@ -18,7 +18,7 @@ export default defineConfig({
 				},
 				bindings: {
 					TOPICS: JSON.stringify([
-						{ name: "discord-katter", id: "topic-id-discord" },
+						{ name: "discord-ietter", id: "topic-id-discord" },
 						{ name: "mac-script", id: "topic-id-mac" },
 					]),
 					TOPIC_WRITE_SECRETS: JSON.stringify({ "mac-script": "test-write-secret" }),
