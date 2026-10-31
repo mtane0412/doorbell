@@ -18,8 +18,14 @@ function mockDiscordMessages(messages: DiscordMessage[]) {
 	return vi.spyOn(globalThis, "fetch").mockImplementation(async () => Response.json(messages));
 }
 
+/** 移行で作られた監視対象を、最新の確認位置とともに取得して確認する */
 async function runCron(): Promise<void> {
-	await pollDiscord(env, getBridge());
+	const bridge = getBridge();
+	const source = (await bridge.getPollSources()).find((candidate) => candidate.type === "discord");
+	if (!source) {
+		throw new Error("前提となる Discord の監視対象がありません");
+	}
+	await pollDiscord(env, bridge, source);
 }
 
 async function readDiscordEvents() {
@@ -70,7 +76,7 @@ describe("Discord Cron", () => {
 			kind: "discord.message",
 			summary: "新着2件",
 			ref: "102",
-			data: { count: 2 },
+			data: { count: 2, channel_id: "1000" },
 		});
 	});
 
@@ -86,7 +92,7 @@ describe("Discord Cron", () => {
 		await runCron();
 
 		const { events } = await readDiscordEvents();
-		expect(events[0]).toMatchObject({ summary: "新着1件", ref: "101", data: { count: 1 } });
+		expect(events[0]).toMatchObject({ summary: "新着1件", ref: "101", data: { count: 1, channel_id: "1000" } });
 	});
 
 	it("自分のボットの投稿だけならイベントを作らず、確認済みIDだけ進める", async () => {

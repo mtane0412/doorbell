@@ -113,6 +113,8 @@ npm install
 
 設定値はすべて Worker のシークレットとして登録し、リポジトリには置きません。登録には `cf workers secrets update <名前> --worker doorbell` を使います。
 
+`TOPICS`、`TOPIC_WRITE_SECRETS`、`DISCORD_CHANNEL_ID`、`DISCORD_BOT_USER_ID`、`COSENSE_PROJECT`、`COSENSE_BOT_USER_ID` は、Durable Object の初回の移行で一度だけ `topics` と `sources` に取り込みます。移行の後にこれらの値を変更しても、動作には反映されません。
+
 | 名前 | 内容 |
 |---|---|
 | `TOPICS` | トピック名と opaque ID の対応。`[{"name":"discord-ietter","id":"推測困難なID"}]` 形式の JSON |
@@ -130,9 +132,7 @@ Worker 内蔵 producer しか使わないトピックは、`TOPIC_WRITE_SECRETS`
 
 ## トピックを追加する
 
-1. `TOPICS` にトピック名と opaque ID を追加します。
-2. `TOPIC_WRITE_SECRETS` にトピック名と書き込みシークレットを追加し、producer に同じシークレットを渡します。
-3. producer から `POST /events/{topic}` を送ります。
+移行の後は、シークレットの変更ではトピックを追加できません。トピックの追加は、管理ページ `doorbell-admin`（未実装）で行います。
 
 ## 構成
 
@@ -144,5 +144,7 @@ Worker 内蔵 producer しか使わないトピックは、`TOPIC_WRITE_SECRETS`
 | `src/cosense.ts` | Cosense のページ更新を確認する producer |
 | `src/auth.ts` | シークレットの定数時間比較 |
 | `src/config.ts` | `TOPICS` と `TOPIC_WRITE_SECRETS` の解析 |
+| `src/migration.ts` | スキーマ移行と旧シークレットの取り込み |
+| `src/poll-error.ts` | `last_error` に記録してよいエラー |
 | `cloudflare.config.ts` | Worker、Cron、バインディングの設定 |
 | `docs/design.md` | 設計メモ |

@@ -6,6 +6,7 @@
 import { exports, env } from "cloudflare:workers";
 import { runInDurableObject } from "cloudflare:test";
 import type { EventBridge } from "../src/event-bridge.ts";
+import { migrateSchema } from "../src/migration.ts";
 
 export const WRITABLE_TOPIC = "mac-script";
 export const INTERNAL_TOPIC = "discord-ietter";
@@ -46,12 +47,21 @@ export function readEvents(since: number, topic: string = WRITABLE_TOPIC): Promi
 	return request(`/events/${topic}?since=${since}`, { headers: bearer(READ_TOKEN) });
 }
 
-/** テスト間で状態が残らないよう、全テーブルとアラームを消す */
+/** 全テーブルを削除する。sources が topics を参照するため、sources から順に消す */
+export function dropAllTables(sql: SqlStorage): void {
+	sql.exec(`
+		DROP TABLE IF EXISTS sources;
+		DROP TABLE IF EXISTS topics;
+		DROP TABLE IF EXISTS events;
+		DROP TABLE IF EXISTS producer_state;
+	`);
+}
+
+/** テスト間で状態が残らないよう、全テーブルを作り直してアラームを消す */
 export async function resetBridge(): Promise<void> {
 	await runInDurableObject(getBridge(), async (_instance, state) => {
-		state.storage.sql.exec("DELETE FROM topics");
-		state.storage.sql.exec("DELETE FROM events");
-		state.storage.sql.exec("DELETE FROM producer_state");
+		dropAllTables(state.storage.sql);
+		await migrateSchema(state.storage, env);
 		await state.storage.deleteAlarm();
 	});
 }

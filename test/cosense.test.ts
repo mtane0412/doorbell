@@ -25,8 +25,14 @@ function mockCosensePages(pages: CosensePage[]) {
 	return vi.spyOn(globalThis, "fetch").mockImplementation(async () => Response.json({ pages }));
 }
 
+/** 移行で作られた監視対象を、最新の確認位置とともに取得して確認する */
 async function poll(): Promise<void> {
-	await pollCosense(env, getBridge());
+	const bridge = getBridge();
+	const source = (await bridge.getPollSources()).find((candidate) => candidate.type === "cosense");
+	if (!source) {
+		throw new Error("前提となる Cosense の監視対象がありません");
+	}
+	await pollCosense(env, bridge, source);
 }
 
 /** 既存のページを1件だけ確認済みにして、初回の記録を終えた状態にする */
@@ -86,7 +92,7 @@ describe("Cosense producer", () => {
 			kind: "cosense.page_updated",
 			summary: "更新2件",
 			ref: "買い物メモ",
-			data: { count: 2 },
+			data: { count: 2, project: "test-project" },
 		});
 	});
 
@@ -116,7 +122,7 @@ describe("Cosense producer", () => {
 		await poll();
 
 		const { events } = await readCosenseEvents();
-		expect(events[0]).toMatchObject({ summary: "更新1件", ref: "買い物メモ", data: { count: 1 } });
+		expect(events[0]).toMatchObject({ summary: "更新1件", ref: "買い物メモ", data: { count: 1, project: "test-project" } });
 	});
 
 	it("自分のボットの更新だけならイベントを作らず、確認位置だけ進める", async () => {
