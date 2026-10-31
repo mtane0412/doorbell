@@ -2,7 +2,7 @@
  * doorbell Worker の Cloudflare 設定
  *
  * 値はすべてシークレットとして登録し、リポジトリに置かない。
- * TOPICS はトピック名と不透明IDの対応の唯一の定義であり、対応をリポジトリから読めないようシークレットとする。
+ * TOPICS はトピック名と opaque ID の対応の唯一の定義であり、対応をリポジトリから読めないようシークレットとする。
  */
 import { bindings, defineConfig, exports, triggers } from "cf/config";
 import * as entrypoint from "./src/index.ts" with { type: "cf-worker" };

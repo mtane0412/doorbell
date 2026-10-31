@@ -2,10 +2,10 @@
 
 変化があった時だけエージェント（Muse）を起こすための、Cloudflare Workers 製のイベント中継基盤です。
 
-doorbell は「合図（認証なし・内容なし）」と「実データ（認証あり）」を分離します。認証情報を持てない軽量な Hook は合図だけを見張り、連番が進んだ時だけエージェントを起こします。起きたエージェントは、読み取りトークンを使って実データを取得します。
+doorbell は「signal（認証なし・内容なし）」と「実データ（認証あり）」を分離します。認証情報を持てない軽量な Hook は signal だけを見張り、連番が進んだ時だけエージェントを起こします。起きたエージェントは、読み取りトークンを使って実データを取得します。
 
 ```
-外部の生産者 ── POST /events/{topic} ──▶ doorbell ◀── Cron（Discord と Cosense の REST を5分おきに確認）
+外部の producer ── POST /events/{topic} ──▶ doorbell ◀── Cron（Discord と Cosense の REST を5分おきに確認）
                                           │
                                           ├─ Durable Object（連番とイベントの保管）
                                           ├─ GET /signal/{signal_key} ◀── Hook（変化の検知）
@@ -19,7 +19,7 @@ doorbell は「合図（認証なし・内容なし）」と「実データ（�
 | メソッドとパス | 認証 | 役割 |
 |---|---|---|
 | `POST /events/{topic}` | `Authorization: Bearer <トピック別シークレット>` | イベントを1件追加し、連番を進めます |
-| `GET /signal/{signal_key}` | なし（推測困難な URL） | 全トピックの不透明IDと連番、最終更新時刻を返します |
+| `GET /signal/{signal_key}` | なし（推測困難な URL） | 全トピックの opaque ID と連番、最終更新時刻を返します |
 | `GET /events/{topic}?since={seq}` | `Authorization: Bearer <READ_TOKEN>` | 指定した連番より後のイベントを返します |
 
 ### イベントを追加する
@@ -33,22 +33,22 @@ curl -X POST "https://<Worker のホスト>/events/<トピック名>" \
 
 `kind` と `summary` は必須の空でない文字列です。`ref`（文字列）と `data`（オブジェクト）は任意です。`seq` と `ts` は doorbell が付与します。成功すると `201` と `{"seq":1}` を返します。
 
-本文の上限は 4 KB です。トークンや個人情報の本文は載せず、大きな本文は ID や URL の参照だけを渡してください。
+body の上限は 4 KB です。トークンや個人情報は載せないでください。メッセージ本文のような大きなデータは載せず、ID や URL の参照だけを渡してください。
 
 | ステータス | 条件 |
 |---|---|
-| `400` | 本文の JSON または項目が不正である |
+| `400` | body の JSON または項目が不正である |
 | `401` | シークレットが誤っている、またはトピックに書き込みシークレットが登録されていない |
 | `404` | トピックが `TOPICS` に登録されていない |
-| `413` | 本文が 4 KB を超えている |
+| `413` | body が 4 KB を超えている |
 
-### 合図を確認する
+### signal を確認する
 
 `GET /signal/{signal_key}` の応答です。トピック名と内容は含みません。イベントが一度もないトピックは `seq` が `0`、`updated_at` が `null` になります。`signal_key` が誤っている場合は `404` を返します。
 
 ```json
 {
-  "topics": [{ "id": "不透明ID", "seq": 42, "updated_at": "2026-10-31T12:00:00.000Z" }]
+  "topics": [{ "id": "opaque ID", "seq": 42, "updated_at": "2026-10-31T12:00:00.000Z" }]
 }
 ```
 
@@ -115,8 +115,8 @@ npm install
 
 | 名前 | 内容 |
 |---|---|
-| `TOPICS` | トピック名と不透明IDの対応。`[{"name":"discord-ietter","id":"推測困難なID"}]` 形式の JSON |
-| `TOPIC_WRITE_SECRETS` | 外部の生産者用の書き込みシークレット。`{"トピック名":"シークレット"}` 形式の JSON |
+| `TOPICS` | トピック名と opaque ID の対応。`[{"name":"discord-ietter","id":"推測困難なID"}]` 形式の JSON |
+| `TOPIC_WRITE_SECRETS` | 外部の producer 用の書き込みシークレット。`{"トピック名":"シークレット"}` 形式の JSON |
 | `READ_TOKEN` | `GET /events/{topic}` の読み取りトークン |
 | `SIGNAL_KEY` | `GET /signal/{signal_key}` の URL に使う推測困難な値 |
 | `DISCORD_BOT_TOKEN` | Discord ボットのトークン |
@@ -126,13 +126,13 @@ npm install
 | `COSENSE_PROJECT` | 監視する Cosense のプロジェクト名 |
 | `COSENSE_BOT_USER_ID` | 除外する自分のボットの Cosense ユーザーID |
 
-Worker 内蔵の生産者しか使わないトピックは、`TOPIC_WRITE_SECRETS` に登録しません。登録がなければ外部から書き込めません。外部の生産者がいない場合の値は `{}` です。
+Worker 内蔵 producer しか使わないトピックは、`TOPIC_WRITE_SECRETS` に登録しません。登録がなければ外部から書き込めません。外部の producer がいない場合の値は `{}` です。
 
 ## トピックを追加する
 
-1. `TOPICS` にトピック名と不透明IDを追加します。
-2. `TOPIC_WRITE_SECRETS` にトピック名と書き込みシークレットを追加し、生産者に同じシークレットを渡します。
-3. 生産者から `POST /events/{topic}` を送ります。
+1. `TOPICS` にトピック名と opaque ID を追加します。
+2. `TOPIC_WRITE_SECRETS` にトピック名と書き込みシークレットを追加し、producer に同じシークレットを渡します。
+3. producer から `POST /events/{topic}` を送ります。
 
 ## 構成
 
@@ -140,8 +140,8 @@ Worker 内蔵の生産者しか使わないトピックは、`TOPIC_WRITE_SECRET
 |---|---|
 | `src/index.ts` | HTTP ルーティングと Cron の入口 |
 | `src/event-bridge.ts` | イベントと連番を保管する Durable Object |
-| `src/discord.ts` | Discord の新着を確認する生産者 |
-| `src/cosense.ts` | Cosense のページ更新を確認する生産者 |
+| `src/discord.ts` | Discord の新着を確認する producer |
+| `src/cosense.ts` | Cosense のページ更新を確認する producer |
 | `src/auth.ts` | シークレットの定数時間比較 |
 | `src/config.ts` | `TOPICS` と `TOPIC_WRITE_SECRETS` の解析 |
 | `cloudflare.config.ts` | Worker、Cron、バインディングの設定 |

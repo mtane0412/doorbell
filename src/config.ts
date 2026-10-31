@@ -37,7 +37,7 @@ export function parseTopics(raw: string): Topic[] {
 /**
  * TOPIC_WRITE_SECRETS シークレットを解析する
  *
- * Worker 内蔵の生産者しか使わないトピックは登録しない。登録がなければ外部から書き込めない。
+ * Worker 内蔵 producer しか使わないトピックは登録しない。登録がなければ外部から書き込めない。
  *
  * @param raw `{"トピック名":"シークレット"}` 形式の JSON 文字列
  * @throws 形式が不正な場合

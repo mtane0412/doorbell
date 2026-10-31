@@ -1,7 +1,7 @@
 /**
- * Cosense 生産者の振る舞いを検証するテスト
+ * Cosense producer の振る舞いを検証するテスト
  *
- * docs/design.md の「Cosense 生産者」の仕様に対応する。外部 API である Cosense の fetch だけをモックする。
+ * docs/design.md の「Cosense producer」の仕様に対応する。外部 API である Cosense の fetch だけをモックする。
  */
 import { env } from "cloudflare:workers";
 import { createScheduledController } from "cloudflare:test";
@@ -49,7 +49,7 @@ afterEach(() => {
 	vi.restoreAllMocks();
 });
 
-describe("Cosense 生産者", () => {
+describe("Cosense producer", () => {
 	it("Personal Access Token を付けて、対象プロジェクトのページ一覧を更新順で取得する", async () => {
 		const fetchMock = mockCosensePages([]);
 
