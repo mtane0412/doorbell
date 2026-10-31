@@ -1,0 +1,25 @@
+{
+	"name": "doorbell",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"dev": "cf dev",
+		"build": "cf build",
+		"deploy": "cf deploy",
+		"types": "cf workers types",
+		"type-check": "cf workers types && tsc",
+		"lint": "eslint . --max-warnings 0",
+		"test": "vitest run"
+	},
+	"devDependencies": {
+		"@cloudflare/vite-plugin": "^2.0.0-beta.v.6",
+		"@cloudflare/vitest-plugin": "^1.4.9",
+		"@cloudflare/workers-types": "^5.20261028.1",
+		"cf": "^1.0.0-beta.24",
+		"eslint": "^10.13.0",
+		"typescript": "^6.0.3",
+		"typescript-eslint": "^8.72.1",
+		"vite": "^8.3.5",
+		"vitest": "^5.0.5"
+	}
+}
