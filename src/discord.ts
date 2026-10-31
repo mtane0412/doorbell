@@ -4,11 +4,10 @@
  * イベントには件数と最新メッセージIDだけを載せ、本文は載せない。
  * 自分のボットの投稿を除外し、エージェントの返信で起床が連鎖することを防ぐ。
  */
-import type { EventBridge, EventInput } from "./event-bridge.ts";
+import type { EventBridge, EventInput, PollSource } from "./event-bridge.ts";
+import { PollError } from "./poll-error.ts";
 
 const DISCORD_API_BASE = "https://discord.com/api/v10";
-const DISCORD_PRODUCER = "discord";
-const DISCORD_TOPIC = "discord-ietter";
 /** Discord API が1回で返せる最大件数。超えた分は次回の Cron で取得する */
 const DISCORD_PAGE_SIZE = 100;
 
@@ -28,16 +27,17 @@ function isDiscordMessage(value: unknown): value is DiscordMessage {
 	);
 }
 
-async function fetchMessages(env: Env, query: string): Promise<DiscordMessage[]> {
-	const response = await fetch(`${DISCORD_API_BASE}/channels/${env.DISCORD_CHANNEL_ID}/messages?${query}`, {
+async function fetchMessages(env: Env, channelId: string, query: string): Promise<DiscordMessage[]> {
+	const channel = encodeURIComponent(channelId);
+	const response = await fetch(`${DISCORD_API_BASE}/channels/${channel}/messages?${query}`, {
 		headers: { Authorization: `Bot ${env.DISCORD_BOT_TOKEN}` },
 	});
 	if (!response.ok) {
-		throw new Error(`Discord API がステータス ${response.status} を返しました`);
+		throw new PollError(`Discord API がステータス ${response.status} を返しました`);
 	}
 	const body: unknown = await response.json();
 	if (!Array.isArray(body) || !body.every(isDiscordMessage)) {
-		throw new Error("Discord API の応答の形式が不正です");
+		throw new PollError("Discord API の応答の形式が不正です");
 	}
 	return body;
 }
@@ -57,36 +57,36 @@ function newestMessage(messages: DiscordMessage[]): DiscordMessage | undefined {
  *
  * @param env Worker のバインディング
  * @param bridge イベントを保管する Durable Object
+ * @param source 確認する監視対象。target はチャンネルIDである
  * @throws Discord API が失敗した場合。確認位置は進まないため、次回の Cron で再確認される
  */
-export async function pollDiscord(env: Env, bridge: DurableObjectStub<EventBridge>): Promise<void> {
-	const cursor = await bridge.getProducerCursor(DISCORD_PRODUCER);
-	if (cursor === null) {
-		const [latest] = await fetchMessages(env, "limit=1");
+export async function pollDiscord(
+	env: Env,
+	bridge: DurableObjectStub<EventBridge>,
+	source: PollSource,
+): Promise<void> {
+	if (source.cursor === null) {
+		const [latest] = await fetchMessages(env, source.target, "limit=1");
 		if (latest) {
-			await bridge.commitProducerPoll(DISCORD_PRODUCER, latest.id, null);
+			await bridge.commitProducerPoll(source.id, latest.id, null);
 		}
 		return;
 	}
 
-	const messages = await fetchMessages(env, `limit=${DISCORD_PAGE_SIZE}&after=${cursor}`);
+	const messages = await fetchMessages(env, source.target, `limit=${DISCORD_PAGE_SIZE}&after=${source.cursor}`);
 	const newest = newestMessage(messages);
 	if (!newest) {
 		return;
 	}
-	const fromOthers = messages.filter((message) => message.author.id !== env.DISCORD_BOT_USER_ID);
+	const fromOthers = messages.filter((message) => message.author.id !== source.excludedUserId);
 	const newestFromOthers = newestMessage(fromOthers);
 	const input: EventInput | null = newestFromOthers
 		? {
 				kind: "discord.message",
 				summary: `新着${fromOthers.length}件`,
 				ref: newestFromOthers.id,
-				data: { count: fromOthers.length },
+				data: { count: fromOthers.length, channel_id: source.target },
 			}
 		: null;
-	await bridge.commitProducerPoll(
-		DISCORD_PRODUCER,
-		newest.id,
-		input ? { topic: DISCORD_TOPIC, input } : null,
-	);
+	await bridge.commitProducerPoll(source.id, newest.id, input ? { topic: source.topic, input } : null);
 }

@@ -26,15 +26,39 @@ export async function secretsMatch(actual: string, expected: string): Promise<bo
 }
 
 /**
+ * シークレットの SHA-256 ハッシュを16進文字列で返す
+ *
+ * 書き込みシークレットは Durable Object にこの値だけを保存する。
+ */
+export async function hashSecret(secret: string): Promise<string> {
+	const digest = await crypto.subtle.digest("SHA-256", encoder.encode(secret));
+	return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+/** Authorization: Bearer ヘッダーの値を返す。形式が違えば null */
+function readBearer(request: Request): string | null {
+	const header = request.headers.get("Authorization") ?? "";
+	return header.startsWith(BEARER_PREFIX) ? header.slice(BEARER_PREFIX.length) : null;
+}
+
+/**
  * リクエストの Authorization: Bearer ヘッダーが正しい値かを判定する
  *
  * @param request 受け取ったリクエスト
  * @param expected 設定されている正しい値
  */
 export async function hasValidBearer(request: Request, expected: string): Promise<boolean> {
-	const header = request.headers.get("Authorization") ?? "";
-	if (!header.startsWith(BEARER_PREFIX)) {
-		return false;
-	}
-	return secretsMatch(header.slice(BEARER_PREFIX.length), expected);
+	const token = readBearer(request);
+	return token !== null && secretsMatch(token, expected);
+}
+
+/**
+ * リクエストの Authorization: Bearer ヘッダーの値が、保存済みのハッシュと一致するかを判定する
+ *
+ * @param request 受け取ったリクエスト
+ * @param expectedHash hashSecret で計算して保存した値
+ */
+export async function hasValidBearerHash(request: Request, expectedHash: string): Promise<boolean> {
+	const token = readBearer(request);
+	return token !== null && secretsMatch(await hashSecret(token), expectedHash);
 }

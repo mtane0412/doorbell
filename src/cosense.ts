@@ -7,11 +7,10 @@
  * 注意: API は各ページの最終更新者しか返さない。人の更新の直後にボットが同じページを更新すると、
  * その人の更新は検知できない。
  */
-import type { EventBridge, EventInput } from "./event-bridge.ts";
+import type { EventBridge, EventInput, PollSource } from "./event-bridge.ts";
+import { PollError } from "./poll-error.ts";
 
 const COSENSE_API_BASE = "https://scrapbox.io/api/pages";
-const COSENSE_PRODUCER = "cosense";
-const COSENSE_TOPIC = "cosense";
 /** 1回で取得するページ数。超えた分は件数に数えないが、確認位置が進むため次回も通知しない */
 const COSENSE_PAGE_SIZE = 100;
 
@@ -38,13 +37,13 @@ function isCosensePage(value: unknown): value is CosensePage {
 	);
 }
 
-async function fetchPages(env: Env): Promise<CosensePage[]> {
-	const project = encodeURIComponent(env.COSENSE_PROJECT);
+async function fetchPages(env: Env, projectName: string): Promise<CosensePage[]> {
+	const project = encodeURIComponent(projectName);
 	const response = await fetch(`${COSENSE_API_BASE}/${project}?sort=updated&limit=${COSENSE_PAGE_SIZE}`, {
 		headers: { "x-personal-access-token": env.COSENSE_PAT },
 	});
 	if (!response.ok) {
-		throw new Error(`Cosense API がステータス ${response.status} を返しました`);
+		throw new PollError(`Cosense API がステータス ${response.status} を返しました`);
 	}
 	const body: unknown = await response.json();
 	if (
@@ -54,7 +53,7 @@ async function fetchPages(env: Env): Promise<CosensePage[]> {
 		!Array.isArray(body.pages) ||
 		!body.pages.every(isCosensePage)
 	) {
-		throw new Error("Cosense API の応答の形式が不正です");
+		throw new PollError("Cosense API の応答の形式が不正です");
 	}
 	return body.pages;
 }
@@ -74,37 +73,37 @@ function newestPage(pages: CosensePage[]): CosensePage | undefined {
  *
  * @param env Worker のバインディング
  * @param bridge イベントを保管する Durable Object
+ * @param source 確認する監視対象。target はプロジェクト名である
  * @throws Cosense API が失敗した場合。確認位置は進まないため、次回の Cron で再確認される
  */
-export async function pollCosense(env: Env, bridge: DurableObjectStub<EventBridge>): Promise<void> {
-	const cursor = await bridge.getProducerCursor(COSENSE_PRODUCER);
-	const pages = await fetchPages(env);
+export async function pollCosense(
+	env: Env,
+	bridge: DurableObjectStub<EventBridge>,
+	source: PollSource,
+): Promise<void> {
+	const pages = await fetchPages(env, source.target);
 	const newest = newestPage(pages);
 	if (!newest) {
 		return;
 	}
-	if (cursor === null) {
-		await bridge.commitProducerPoll(COSENSE_PRODUCER, String(newest.updated), null);
+	if (source.cursor === null) {
+		await bridge.commitProducerPoll(source.id, String(newest.updated), null);
 		return;
 	}
 
-	const updatedPages = pages.filter((page) => page.updated > Number(cursor));
+	const updatedPages = pages.filter((page) => page.updated > Number(source.cursor));
 	if (updatedPages.length === 0) {
 		return;
 	}
-	const fromOthers = updatedPages.filter((page) => page.lastUpdateUser?.id !== env.COSENSE_BOT_USER_ID);
+	const fromOthers = updatedPages.filter((page) => page.lastUpdateUser?.id !== source.excludedUserId);
 	const newestFromOthers = newestPage(fromOthers);
 	const input: EventInput | null = newestFromOthers
 		? {
 				kind: "cosense.page_updated",
 				summary: `更新${fromOthers.length}件`,
 				ref: newestFromOthers.id,
-				data: { count: fromOthers.length },
+				data: { count: fromOthers.length, project: source.target },
 			}
 		: null;
-	await bridge.commitProducerPoll(
-		COSENSE_PRODUCER,
-		String(newest.updated),
-		input ? { topic: COSENSE_TOPIC, input } : null,
-	);
+	await bridge.commitProducerPoll(source.id, String(newest.updated), input ? { topic: source.topic, input } : null);
 }

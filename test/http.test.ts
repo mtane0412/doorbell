@@ -209,6 +209,36 @@ describe("GET /events/{topic}", () => {
 	});
 });
 
+describe("論理削除されたトピック", () => {
+	/** 投稿済みのトピックを論理削除の状態にする */
+	async function softDeleteWritableTopic(): Promise<void> {
+		await postEvent("削除前のイベント");
+		await runInDurableObject(getBridge(), (_instance, state) => {
+			state.storage.sql.exec("UPDATE topics SET deleted_at_ms = ? WHERE name = ?", Date.now(), WRITABLE_TOPIC);
+		});
+	}
+
+	it("/signal に出さない", async () => {
+		await softDeleteWritableTopic();
+
+		const body = (await (await request(SIGNAL_PATH)).json()) as SignalBody;
+
+		expect(body.topics.map((topic) => topic.id)).toEqual(["topic-id-discord", "topic-id-cosense"]);
+	});
+
+	it("POST /events は 404 を返す", async () => {
+		await softDeleteWritableTopic();
+
+		expect((await postEvent("削除後の投稿")).status).toBe(404);
+	});
+
+	it("GET /events は 404 を返す", async () => {
+		await softDeleteWritableTopic();
+
+		expect((await readEvents(0)).status).toBe(404);
+	});
+});
+
 describe("保持期間", () => {
 	/** 全イベントを8日前の投稿に書き換える */
 	async function ageAllEvents(): Promise<void> {
