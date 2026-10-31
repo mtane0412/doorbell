@@ -51,6 +51,15 @@ function newestMessage(messages: DiscordMessage[]): DiscordMessage | undefined {
 }
 
 /**
+ * チャンネルを読めることを API を1回呼んで確認する
+ *
+ * @throws チャンネルの指定の誤りや権限不足で API が失敗した場合
+ */
+export async function verifyDiscordChannel(env: Env, channelId: string): Promise<void> {
+	await fetchMessages(env, channelId, "limit=1");
+}
+
+/**
  * 新着を確認し、確認位置とイベントを記録する
  *
  * 初回は過去の投稿を通知せず、最新メッセージIDだけを記録する。

@@ -3,7 +3,13 @@
  */
 
 const BEARER_PREFIX = "Bearer ";
+/** 生成するシークレットのバイト数（256 ビット） */
+const SECRET_BYTES = 32;
 const encoder = new TextEncoder();
+
+function toHex(bytes: ArrayBuffer): string {
+	return Array.from(new Uint8Array(bytes), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
 
 /**
  * 2つの文字列が等しいかを定数時間で判定する
@@ -31,8 +37,12 @@ export async function secretsMatch(actual: string, expected: string): Promise<bo
  * 書き込みシークレットは Durable Object にこの値だけを保存する。
  */
 export async function hashSecret(secret: string): Promise<string> {
-	const digest = await crypto.subtle.digest("SHA-256", encoder.encode(secret));
-	return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+	return toHex(await crypto.subtle.digest("SHA-256", encoder.encode(secret)));
+}
+
+/** 推測困難な書き込みシークレットを生成する */
+export function generateSecret(): string {
+	return toHex(crypto.getRandomValues(new Uint8Array(SECRET_BYTES)).buffer);
 }
 
 /** Authorization: Bearer ヘッダーの値を返す。形式が違えば null */

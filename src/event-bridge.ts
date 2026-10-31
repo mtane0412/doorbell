@@ -5,12 +5,21 @@
  * 連番が巻き戻ると Hook が「進んでいない」と判定し、通知が止まるためである。
  */
 import { DurableObject } from "cloudflare:workers";
+import { generateSecret, hashSecret } from "./auth.ts";
+import { verifyCosenseProject } from "./cosense.ts";
+import { verifyDiscordChannel } from "./discord.ts";
 import { migrateSchema } from "./migration.ts";
+import { describePollError } from "./poll-error.ts";
 
 /** トピックごとの保持件数 */
 const MAX_EVENTS_PER_TOPIC = 20;
 /** 監視対象の暫定の上限。Workers Free の Cron の CPU 時間に収めるため（docs/design.md の「Cron」） */
 const MAX_SOURCES = 10;
+/** トピック名は URL のパスに使うため、そのまま書ける文字に限る */
+const TOPIC_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
+const DISCORD_CHANNEL_ID_PATTERN = /^\d+$/;
+const INVALID_TOPIC_NAME = "トピック名は英小文字・数字・ハイフンの64文字以内で入力してください";
+const TOPIC_NAME_TAKEN = "このトピック名は使えません。削除済みの名前も再利用できません";
 /** イベントの保持期間 */
 const EVENT_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 
@@ -48,6 +57,44 @@ export type PollSource = {
 
 /** 追加する監視対象。id と確認位置は Durable Object が管理する */
 export type NewPollSource = Pick<PollSource, "type" | "target" | "excludedUserId" | "topic">;
+
+/** 操作の結果。失敗の理由は画面に表示してよい内容だけを持つ */
+export type OperationResult = { ok: true } | { ok: false; error: string };
+
+/** 書き込みシークレットを発行する操作の結果。writeSecret はこの戻り値にしか現れない */
+export type WriteSecretResult = { ok: true; writeSecret: string } | { ok: false; error: string };
+
+/** 管理ページの一覧の1行。source が null のトピックは外部トピックである */
+export type AdminTopic = {
+	name: string;
+	opaqueId: string;
+	seq: number;
+	updatedAt: string | null;
+	hasWriteSecret: boolean;
+	source: {
+		id: string;
+		type: SourceType;
+		target: string;
+		excludedUserId: string;
+		enabled: boolean;
+		lastError: string | null;
+	} | null;
+};
+
+/** LEFT JOIN のため、監視対象の列は source_id が null の行では null になるが、その場合は読まない */
+type AdminTopicRow = {
+	name: string;
+	opaque_id: string;
+	seq: number;
+	updated_at_ms: number | null;
+	has_write_secret: number;
+	source_id: string | null;
+	type: SourceType;
+	target: string;
+	excluded_user_id: string;
+	enabled: number;
+	last_error: string | null;
+};
 
 type PollSourceRow = {
 	id: string;
@@ -117,17 +164,23 @@ export class EventBridge extends DurableObject<Env> {
 	/**
 	 * 監視対象とそのトピックを追加する
 	 *
-	 * トピック名は論理削除済みのものを含めて再利用できず、主キーの制約で例外になる。
-	 *
-	 * @throws 監視対象が上限に達している場合、またはトピック名や監視先が重複している場合
+	 * 入力の誤りと権限不足を追加時に検出するため API を1回呼び、成功した場合だけ保存する。
+	 * API の応答を待つ間に他の追加が割り込めるため、保存の直前に条件を確認し直す。
 	 */
-	async addSource(source: NewPollSource): Promise<void> {
-		this.ctx.storage.transactionSync(() => {
-			const { total } = this.ctx.storage.sql
-				.exec<{ total: number }>("SELECT COUNT(*) AS total FROM sources")
-				.one();
-			if (total >= MAX_SOURCES) {
-				throw new Error(`監視対象は${MAX_SOURCES}件までです`);
+	async addSource(source: NewPollSource): Promise<OperationResult> {
+		const rejection = this.findAddSourceRejection(source);
+		if (rejection !== null) {
+			return { ok: false, error: rejection };
+		}
+		try {
+			await this.verifySource(source);
+		} catch (error) {
+			return { ok: false, error: describePollError(error) };
+		}
+		return this.ctx.storage.transactionSync((): OperationResult => {
+			const lateRejection = this.findAddSourceRejection(source);
+			if (lateRejection !== null) {
+				return { ok: false, error: lateRejection };
 			}
 			this.ctx.storage.sql.exec(
 				"INSERT INTO topics (name, opaque_id, seq) VALUES (?, ?, 0)",
@@ -142,7 +195,110 @@ export class EventBridge extends DurableObject<Env> {
 				source.excludedUserId,
 				source.topic,
 			);
+			return { ok: true };
 		});
+	}
+
+	/** 監視対象を Cron の確認対象から外す。トピックは /signal に残す */
+	async disableSource(sourceId: string): Promise<void> {
+		this.ctx.storage.sql.exec("UPDATE sources SET enabled = 0 WHERE id = ?", sourceId);
+	}
+
+	/**
+	 * 無効の監視対象を再開する
+	 *
+	 * 停止中の更新で不要な起床を起こさないよう、確認位置を消して初回と同じ扱いにする。
+	 * 有効な監視対象には何もしない。二重送信で稼働中の確認位置を消さないためである。
+	 */
+	async resumeSource(sourceId: string): Promise<void> {
+		this.ctx.storage.transactionSync(() => {
+			const resumed = this.ctx.storage.sql
+				.exec("UPDATE sources SET enabled = 1, last_error = NULL WHERE id = ? AND enabled = 0 RETURNING id", sourceId)
+				.toArray();
+			if (resumed.length > 0) {
+				this.ctx.storage.sql.exec("DELETE FROM producer_state WHERE producer = ?", sourceId);
+			}
+		});
+	}
+
+	/** 監視対象と確認位置を削除し、連番を保持するためトピックは論理削除する */
+	async removeSource(sourceId: string): Promise<void> {
+		this.ctx.storage.transactionSync(() => {
+			const removed = this.ctx.storage.sql
+				.exec<{ topic: string }>("DELETE FROM sources WHERE id = ? RETURNING topic", sourceId)
+				.toArray()[0];
+			if (!removed) {
+				return;
+			}
+			this.ctx.storage.sql.exec("DELETE FROM producer_state WHERE producer = ?", sourceId);
+			this.softDeleteTopic(removed.topic);
+		});
+	}
+
+	/**
+	 * 外部の producer 用のトピックを作成し、書き込みシークレットを返す
+	 *
+	 * シークレットの平文はこの戻り値だけに現れ、Durable Object にはハッシュだけを保存する。
+	 * 名前は論理削除済みのものを含めて再利用できない。連番の巻き戻りを防ぐためである。
+	 */
+	async createExternalTopic(name: string): Promise<WriteSecretResult> {
+		if (!TOPIC_NAME_PATTERN.test(name)) {
+			return { ok: false, error: INVALID_TOPIC_NAME };
+		}
+		const writeSecret = generateSecret();
+		const hash = await hashSecret(writeSecret);
+		return this.ctx.storage.transactionSync((): WriteSecretResult => {
+			if (this.topicNameExists(name)) {
+				return { ok: false, error: TOPIC_NAME_TAKEN };
+			}
+			this.ctx.storage.sql.exec(
+				"INSERT INTO topics (name, opaque_id, seq, write_secret_hash) VALUES (?, ?, 0, ?)",
+				name,
+				crypto.randomUUID(),
+				hash,
+			);
+			return { ok: true, writeSecret };
+		});
+	}
+
+	/** 外部トピックを論理削除する。監視対象のトピックは監視対象の削除で消す */
+	async deleteExternalTopic(name: string): Promise<OperationResult> {
+		const rejection = this.findExternalTopicRejection(name);
+		if (rejection !== null) {
+			return { ok: false, error: rejection };
+		}
+		this.softDeleteTopic(name);
+		return { ok: true };
+	}
+
+	/** 外部トピックの書き込みシークレットを再発行する。古い値は直ちに失効する */
+	async rotateWriteSecret(name: string): Promise<WriteSecretResult> {
+		const writeSecret = generateSecret();
+		const hash = await hashSecret(writeSecret);
+		const rejection = this.findExternalTopicRejection(name);
+		if (rejection !== null) {
+			return { ok: false, error: rejection };
+		}
+		this.ctx.storage.sql.exec("UPDATE topics SET write_secret_hash = ? WHERE name = ?", hash, name);
+		return { ok: true, writeSecret };
+	}
+
+	/**
+	 * 管理ページの一覧を返す
+	 *
+	 * 論理削除済みのトピックを除く。書き込みシークレットのハッシュは有無だけを返す。
+	 */
+	async getAdminOverview(): Promise<AdminTopic[]> {
+		return this.ctx.storage.sql
+			.exec<AdminTopicRow>(
+				`SELECT t.name, t.opaque_id, t.seq, t.updated_at_ms, t.write_secret_hash IS NOT NULL AS has_write_secret,
+					s.id AS source_id, s.type, s.target, s.excluded_user_id, s.enabled, s.last_error
+				 FROM topics t LEFT JOIN sources s ON s.topic = t.name
+				 WHERE t.deleted_at_ms IS NULL
+				 ORDER BY t.rowid`,
+			)
+			.toArray()
+			.map(toAdminTopic);
 	}
 
 	/** 監視対象の直近のエラーを記録する。null なら消す */
@@ -225,6 +381,12 @@ export class EventBridge extends DurableObject<Env> {
 		cursor: string,
 		event: { topic: string; input: EventInput } | null,
 	): Promise<void> {
+		// API の応答を待つ間に無効化・削除された監視対象の結果は捨てる。確認位置の残骸を作らないためである
+		const isActive =
+			this.ctx.storage.sql.exec("SELECT 1 FROM sources WHERE id = ? AND enabled = 1", producer).toArray().length > 0;
+		if (!isActive) {
+			return;
+		}
 		this.ctx.storage.transactionSync(() => {
 			this.ctx.storage.sql.exec(
 				"INSERT INTO producer_state (producer, cursor) VALUES (?, ?) ON CONFLICT (producer) DO UPDATE SET cursor = excluded.cursor",
@@ -249,6 +411,71 @@ export class EventBridge extends DurableObject<Env> {
 		if (oldest !== null) {
 			await this.ctx.storage.setAlarm(oldest + EVENT_RETENTION_MS);
 		}
+	}
+
+	/** 追加できない理由を返す。追加できるなら null */
+	private findAddSourceRejection(source: NewPollSource): string | null {
+		if (!TOPIC_NAME_PATTERN.test(source.topic)) {
+			return INVALID_TOPIC_NAME;
+		}
+		if (source.excludedUserId === "" || source.target === "") {
+			return "監視先と除外するユーザーIDを入力してください";
+		}
+		if (source.type === "discord" && !DISCORD_CHANNEL_ID_PATTERN.test(source.target)) {
+			return "チャンネルIDは数字で入力してください";
+		}
+		const { total } = this.ctx.storage.sql
+			.exec<{ total: number }>("SELECT COUNT(*) AS total FROM sources")
+			.one();
+		if (total >= MAX_SOURCES) {
+			return `監視対象は${MAX_SOURCES}件までです`;
+		}
+		if (this.topicNameExists(source.topic)) {
+			return TOPIC_NAME_TAKEN;
+		}
+		const isDuplicate =
+			this.ctx.storage.sql
+				.exec("SELECT 1 FROM sources WHERE type = ? AND target = ?", source.type, source.target)
+				.toArray().length > 0;
+		return isDuplicate ? "この監視先はすでに登録されています" : null;
+	}
+
+	/** 監視先を読めることを、種類に応じた API で確認する */
+	private verifySource(source: NewPollSource): Promise<void> {
+		switch (source.type) {
+			case "discord":
+				return verifyDiscordChannel(this.env, source.target);
+			case "cosense":
+				return verifyCosenseProject(this.env, source.target);
+			default: {
+				const exhaustive: never = source.type;
+				throw new Error(`未対応の監視対象です: ${String(exhaustive)}`);
+			}
+		}
+	}
+
+	/** 論理削除済みを含めて、名前が使われているかを返す */
+	private topicNameExists(name: string): boolean {
+		return this.ctx.storage.sql.exec("SELECT 1 FROM topics WHERE name = ?", name).toArray().length > 0;
+	}
+
+	/** 外部トピックとして操作できない理由を返す。操作できるなら null */
+	private findExternalTopicRejection(name: string): string | null {
+		const row = this.ctx.storage.sql
+			.exec<{ source_id: string | null }>(
+				`SELECT s.id AS source_id FROM topics t LEFT JOIN sources s ON s.topic = t.name
+				 WHERE t.name = ? AND t.deleted_at_ms IS NULL`,
+				name,
+			)
+			.toArray()[0];
+		if (!row) {
+			return "トピックが見つかりません";
+		}
+		return row.source_id === null ? null : "監視対象のトピックは操作できません。監視対象の画面の操作を使ってください";
+	}
+
+	private softDeleteTopic(name: string): void {
+		this.ctx.storage.sql.exec("UPDATE topics SET deleted_at_ms = ? WHERE name = ?", Date.now(), name);
 	}
 
 	/** 連番を進めてイベントを挿入し、保持件数を超えた分を削除する。トランザクション内で呼ぶこと */
@@ -285,6 +512,27 @@ export class EventBridge extends DurableObject<Env> {
 			await this.ctx.storage.setAlarm(Date.now() + EVENT_RETENTION_MS);
 		}
 	}
+}
+
+function toAdminTopic(row: AdminTopicRow): AdminTopic {
+	return {
+		name: row.name,
+		opaqueId: row.opaque_id,
+		seq: row.seq,
+		updatedAt: row.updated_at_ms === null ? null : new Date(row.updated_at_ms).toISOString(),
+		hasWriteSecret: row.has_write_secret === 1,
+		source:
+			row.source_id === null
+				? null
+				: {
+						id: row.source_id,
+						type: row.type,
+						target: row.target,
+						excludedUserId: row.excluded_user_id,
+						enabled: row.enabled === 1,
+						lastError: row.last_error,
+					},
+	};
 }
 
 function toStoredEvent(row: EventRow): StoredEvent {
