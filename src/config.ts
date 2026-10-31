@@ -23,7 +23,7 @@ function isTopic(value: unknown): value is Topic {
 /**
  * TOPICS シークレットを解析する
  *
- * @param raw `[{"name":"discord-katter","id":"推測困難なID"}]` 形式の JSON 文字列
+ * @param raw `[{"name":"discord-ietter","id":"推測困難なID"}]` 形式の JSON 文字列
  * @throws 形式が不正な場合
  */
 export function parseTopics(raw: string): Topic[] {
