@@ -6,6 +6,7 @@
  */
 import { hasValidBearer, secretsMatch } from "./auth.ts";
 import { parseTopics, parseWriteSecrets } from "./config.ts";
+import { pollCosense } from "./cosense.ts";
 import { pollDiscord } from "./discord.ts";
 import { EventBridge, type EventInput } from "./event-bridge.ts";
 
@@ -120,6 +121,12 @@ export default {
 	},
 
 	async scheduled(_controller, env) {
-		await pollDiscord(env, getBridge(env));
+		// 片方の API 障害でもう片方の検知を止めないよう、両方を最後まで実行してから失敗を報告する
+		const bridge = getBridge(env);
+		const results = await Promise.allSettled([pollDiscord(env, bridge), pollCosense(env, bridge)]);
+		const reasons = results.flatMap((result) => (result.status === "rejected" ? [result.reason] : []));
+		if (reasons.length > 0) {
+			throw new AggregateError(reasons, "生産者の確認に失敗しました");
+		}
 	},
 } satisfies ExportedHandler<Env>;

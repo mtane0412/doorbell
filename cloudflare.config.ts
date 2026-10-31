@@ -8,8 +8,8 @@ import { bindings, defineConfig, exports, triggers } from "cf/config";
 import * as entrypoint from "./src/index.ts" with { type: "cf-worker" };
 
 const WORKER_NAME = "doorbell";
-/** Discord Cron の実行間隔（docs/design.md の決定事項） */
-const DISCORD_POLL_SCHEDULE = "*/5 * * * *";
+/** Discord と Cosense を確認する Cron の実行間隔（docs/design.md の決定事項） */
+const POLL_SCHEDULE = "*/5 * * * *";
 
 export default defineConfig({
 	worker: {
@@ -19,7 +19,7 @@ export default defineConfig({
 		exports: {
 			EventBridge: exports.durableObject({ storage: "sqlite" }),
 		},
-		triggers: [triggers.scheduled({ schedule: DISCORD_POLL_SCHEDULE })],
+		triggers: [triggers.scheduled({ schedule: POLL_SCHEDULE })],
 		env: {
 			EVENT_BRIDGE: bindings.durableObject({ worker: WORKER_NAME, exportName: "EventBridge" }),
 			TOPICS: bindings.secret(),
@@ -29,6 +29,9 @@ export default defineConfig({
 			DISCORD_BOT_TOKEN: bindings.secret(),
 			DISCORD_CHANNEL_ID: bindings.secret(),
 			DISCORD_BOT_USER_ID: bindings.secret(),
+			COSENSE_PAT: bindings.secret(),
+			COSENSE_PROJECT: bindings.secret(),
+			COSENSE_BOT_USER_ID: bindings.secret(),
 		},
 	},
 });
