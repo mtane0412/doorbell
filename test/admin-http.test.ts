@@ -152,6 +152,18 @@ describe("Cloudflare Access の JWT の検証", () => {
 	});
 
 	it.each([
+		["HTTP エラーを返す", () => new Response("server error", { status: 500 })],
+		["JSON でない応答を返す", () => new Response("これはJSONではありません")],
+		["鍵の一覧の形をしていない応答を返す", () => Response.json({ keys: "鍵なし" })],
+	])("公開鍵の取得先が %s なら、不正な JWT として扱わず失敗にする", async (_label, makeResponse) => {
+		// 前提: JWT は正しいが、公開鍵の取得先に障害が起きている
+		vi.restoreAllMocks();
+		vi.spyOn(globalThis, "fetch").mockImplementation(async () => makeResponse());
+
+		await expect(get(await signToken())).rejects.toThrow();
+	});
+
+	it.each([
 		["ACCESS_TEAM_DOMAIN", { ...adminEnv, ACCESS_TEAM_DOMAIN: "" }],
 		["ACCESS_AUD", { ...adminEnv, ACCESS_AUD: "" }],
 	])("%s が未設定なら通さず、失敗にする", async (_label, misconfiguredEnv) => {

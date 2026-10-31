@@ -11,6 +11,17 @@ const JWT_HEADER = "Cf-Access-Jwt-Assertion";
 const CERTS_PATH = "/cdn-cgi/access/certs";
 /** Access の JWT の署名アルゴリズム。指定しないと alg の差し替えを受け入れる余地が残る */
 const ACCESS_ALGORITHM = "RS256";
+/** JWT 自体に原因がある jose のエラー。これ以外は公開鍵の取得先の障害などとして扱う */
+const INVALID_JWT_ERRORS = [
+	errors.JOSEAlgNotAllowed,
+	errors.JOSENotSupported,
+	errors.JWKSNoMatchingKey,
+	errors.JWSInvalid,
+	errors.JWSSignatureVerificationFailed,
+	errors.JWTClaimValidationFailed,
+	errors.JWTExpired,
+	errors.JWTInvalid,
+];
 
 /**
  * リクエストの JWT が、このアプリケーション向けの有効なものかを判定する
@@ -37,8 +48,8 @@ export async function hasValidAccessJwt(request: Request, config: AccessConfig):
 		});
 		return true;
 	} catch (error) {
-		// jose の検証エラーだけを「不正な JWT」とする。通信の失敗などは呼び出し側へ伝える
-		if (error instanceof errors.JOSEError) {
+		// JWT 自体の誤りだけを「不正な JWT」とする。JOSEError には公開鍵の取得の失敗も含まれるため、基底クラスでは判定しない
+		if (INVALID_JWT_ERRORS.some((errorClass) => error instanceof errorClass)) {
 			return false;
 		}
 		throw error;
