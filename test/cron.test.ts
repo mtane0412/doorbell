@@ -6,6 +6,7 @@
 import { env } from "cloudflare:workers";
 import { createScheduledController, runInDurableObject } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { NewPollSource } from "../src/event-bridge.ts";
 import worker from "../src/index.ts";
 import { getBridge, readEvents, resetBridge } from "./helpers.ts";
 
@@ -13,8 +14,6 @@ const SECOND_CHANNEL_ID = "2000";
 const SECOND_CHANNEL_TOPIC = "discord-garden";
 const SECOND_PROJECT = "tane-garden";
 const SECOND_PROJECT_TOPIC = "cosense-garden";
-/** 暫定の上限（docs/design.md の「Cron」） */
-const MAX_SOURCES = 10;
 const HUMAN_USER_ID = "1234";
 
 function runCron(): Promise<void> {
@@ -32,9 +31,19 @@ function mockApis(failingUrlPart: string | null, failureStatus = 500) {
 	});
 }
 
+/** 追加時の API の確認だけ成功させて、監視対象を追加する */
+async function addSource(source: NewPollSource): Promise<void> {
+	const fetchMock = mockApis(null);
+	const result = await getBridge().addSource(source);
+	fetchMock.mockRestore();
+	if (!result.ok) {
+		throw new Error(result.error);
+	}
+}
+
 /** 2つ目のチャンネルを、既定の監視対象とは別のトピックで追加する */
 function addSecondChannel(): Promise<void> {
-	return getBridge().addSource({
+	return addSource({
 		type: "discord",
 		target: SECOND_CHANNEL_ID,
 		excludedUserId: "9999",
@@ -54,7 +63,7 @@ afterEach(() => {
 describe("複数の監視対象", () => {
 	it("Discord の複数チャンネルと Cosense の複数プロジェクトをすべて確認する", async () => {
 		await addSecondChannel();
-		await getBridge().addSource({
+		await addSource({
 			type: "cosense",
 			target: SECOND_PROJECT,
 			excludedUserId: "user-id-tanehouse",
@@ -215,44 +224,5 @@ describe("last_error", () => {
 		mockApis(null);
 		await runCron();
 		expect(await readWriteCount()).toBe(3);
-	});
-});
-
-describe("監視対象の上限", () => {
-	/** 既定の2件に加えて、指定した件数の監視対象を追加する */
-	async function addChannels(count: number): Promise<void> {
-		for (let index = 0; index < count; index += 1) {
-			await getBridge().addSource({
-				type: "discord",
-				target: `30${index}`,
-				excludedUserId: "9999",
-				topic: `discord-channel-${index}`,
-			});
-		}
-	}
-
-	it("上限までは追加でき、Cron の確認対象になる", async () => {
-		await addChannels(MAX_SOURCES - 2);
-
-		expect(await getBridge().getPollSources()).toHaveLength(MAX_SOURCES);
-	});
-
-	it("上限を超える追加は例外になり、トピックも作られない", async () => {
-		await addChannels(MAX_SOURCES - 2);
-
-		// RPC 越しの例外はテスト実行環境が未処理の例外として扱うため、インスタンスを直接呼び出す
-		await runInDurableObject(getBridge(), async (instance) => {
-			await expect(
-				instance.addSource({
-					type: "discord",
-					target: "400",
-					excludedUserId: "9999",
-					topic: "discord-over-limit",
-				}),
-			).rejects.toThrow();
-		});
-
-		expect((await readEvents(0, "discord-over-limit")).status).toBe(404);
-		expect(await getBridge().getPollSources()).toHaveLength(MAX_SOURCES);
 	});
 });

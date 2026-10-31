@@ -1,0 +1,328 @@
+/**
+ * doorbell-admin Worker の振る舞いを検証するテスト
+ *
+ * docs/design.md の「管理ページ」の仕様に対応する。doorbell-admin は別の Worker だが、
+ * バインディング名が同じであるため、テスト環境の本物の EventBridge に接続して検証する。
+ * 外部 API と Cloudflare Access の公開鍵の fetch だけをモックする。
+ */
+import { env } from "cloudflare:workers";
+import { runInDurableObject } from "cloudflare:test";
+import { exportJWK, generateKeyPair, SignJWT } from "jose";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import admin from "../admin/src/index.ts";
+import adminConfigSource from "../admin/cloudflare.config.ts?raw";
+import { getBridge, resetBridge } from "./helpers.ts";
+
+const TEAM_DOMAIN = "https://tane-team.cloudflareaccess.com";
+const AUDIENCE = "access-audience-tag";
+const KEY_ID = "tane-key";
+const ADMIN_ORIGIN = "https://doorbell-admin.test";
+const adminEnv = { EVENT_BRIDGE: env.EVENT_BRIDGE, ACCESS_TEAM_DOMAIN: TEAM_DOMAIN, ACCESS_AUD: AUDIENCE };
+
+type SigningKey = Awaited<ReturnType<typeof generateKeyPair>>["privateKey"];
+let signingKey: SigningKey;
+let unknownKey: SigningKey;
+let publicJwk: Record<string, unknown>;
+
+/** 正しい鍵・発行者・対象で署名した、有効な Access の JWT を作る */
+function signToken(
+	overrides: { key?: SigningKey; issuer?: string; audience?: string; expiresAt?: string } = {},
+): Promise<string> {
+	return new SignJWT({ email: "tane@example.jp" })
+		.setProtectedHeader({ alg: "RS256", kid: KEY_ID })
+		.setIssuer(overrides.issuer ?? TEAM_DOMAIN)
+		.setAudience(overrides.audience ?? AUDIENCE)
+		.setIssuedAt("-1h")
+		.setExpirationTime(overrides.expiresAt ?? "1h")
+		.sign(overrides.key ?? signingKey);
+}
+
+/** Access の公開鍵と外部 API に応答するモックを設定する */
+function mockExternal(apiStatus = 200) {
+	return vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+		const url = String(input);
+		if (url === `${TEAM_DOMAIN}/cdn-cgi/access/certs`) {
+			return Response.json({ keys: [publicJwk] });
+		}
+		if (apiStatus !== 200) {
+			return new Response("応答本文の秘密", { status: apiStatus });
+		}
+		return url.startsWith("https://discord.com/") ? Response.json([]) : Response.json({ pages: [] });
+	});
+}
+
+async function get(token?: string): Promise<Response> {
+	return admin.fetch(
+		new Request(`${ADMIN_ORIGIN}/`, { headers: token ? { "Cf-Access-Jwt-Assertion": token } : {} }),
+		adminEnv,
+	);
+}
+
+/** 正しい JWT と Origin でフォームを送信する */
+async function post(path: string, fields: Record<string, string> = {}, origin: string | null = ADMIN_ORIGIN) {
+	const headers: Record<string, string> = { "Cf-Access-Jwt-Assertion": await signToken() };
+	if (origin !== null) {
+		headers["Origin"] = origin;
+	}
+	return admin.fetch(
+		new Request(`${ADMIN_ORIGIN}${path}`, { method: "POST", headers, body: new URLSearchParams(fields) }),
+		adminEnv,
+	);
+}
+
+/** 発行された書き込みシークレットを HTML から取り出す */
+function issuedSecret(html: string): string {
+	const match = /<code id="issued-secret"[^>]*>([^<]+)<\/code>/.exec(html);
+	if (!match?.[1]) {
+		throw new Error("発行されたシークレットが画面にありません");
+	}
+	return match[1];
+}
+
+beforeAll(async () => {
+	const pair = await generateKeyPair("RS256", { extractable: true });
+	signingKey = pair.privateKey;
+	publicJwk = { ...(await exportJWK(pair.publicKey)), kid: KEY_ID, alg: "RS256", use: "sig" };
+	unknownKey = (await generateKeyPair("RS256")).privateKey;
+});
+beforeEach(async () => {
+	await resetBridge();
+	mockExternal();
+});
+afterEach(() => {
+	vi.restoreAllMocks();
+});
+
+describe("Cloudflare Access の JWT の検証", () => {
+	it("正しい JWT なら一覧を返す", async () => {
+		const response = await get(await signToken());
+
+		expect(response.status).toBe(200);
+		expect(await response.text()).toContain("discord-ietter");
+	});
+
+	it("JWT がなければ拒否し、内容を返さない", async () => {
+		const response = await get();
+
+		expect(response.status).toBe(403);
+		expect(await response.text()).not.toContain("discord-ietter");
+	});
+
+	it.each([
+		["JWT の形式でない値", () => Promise.resolve("これはJWTではありません")],
+		["未知の鍵で署名された JWT", () => signToken({ key: unknownKey })],
+		["別の発行者の JWT", () => signToken({ issuer: "https://other-team.cloudflareaccess.com" })],
+		["別のアプリケーション向けの JWT", () => signToken({ audience: "other-application" })],
+		["期限切れの JWT", () => signToken({ expiresAt: "-1m" })],
+		[
+			"署名のない JWT",
+			() => {
+				const encode = (value: object) => btoa(JSON.stringify(value)).replace(/=+$/, "");
+				const claims = { iss: TEAM_DOMAIN, aud: AUDIENCE, exp: 4_000_000_000 };
+				return Promise.resolve(`${encode({ alg: "none", kid: KEY_ID })}.${encode(claims)}.`);
+			},
+		],
+	])("%s なら拒否する", async (_label, makeToken) => {
+		const response = await get(await makeToken());
+
+		expect(response.status).toBe(403);
+		expect(await response.text()).not.toContain("discord-ietter");
+	});
+
+	it("POST でも JWT がなければ拒否し、変更しない", async () => {
+		const response = await admin.fetch(
+			new Request(`${ADMIN_ORIGIN}/topics`, {
+				method: "POST",
+				headers: { Origin: ADMIN_ORIGIN },
+				body: new URLSearchParams({ name: "garden-sensor" }),
+			}),
+			adminEnv,
+		);
+
+		expect(response.status).toBe(403);
+		const names = (await getBridge().getAdminOverview()).map((entry) => entry.name);
+		expect(names).not.toContain("garden-sensor");
+	});
+
+	it("公開鍵を取得できないなら通さず、失敗にする", async () => {
+		vi.restoreAllMocks();
+		vi.spyOn(globalThis, "fetch").mockRejectedValue(new TypeError("接続できません"));
+
+		await expect(get(await signToken())).rejects.toThrow();
+	});
+
+	it.each([
+		["ACCESS_TEAM_DOMAIN", { ...adminEnv, ACCESS_TEAM_DOMAIN: "" }],
+		["ACCESS_AUD", { ...adminEnv, ACCESS_AUD: "" }],
+	])("%s が未設定なら通さず、失敗にする", async (_label, misconfiguredEnv) => {
+		const request = new Request(`${ADMIN_ORIGIN}/`, {
+			headers: { "Cf-Access-Jwt-Assertion": await signToken() },
+		});
+
+		await expect(admin.fetch(request, misconfiguredEnv)).rejects.toThrow();
+	});
+});
+
+describe("POST の Origin の検証", () => {
+	it.each([
+		["別のオリジン", "https://evil.example.com"],
+		["Origin なし", null],
+	])("%s からの POST は拒否し、変更しない", async (_label, origin) => {
+		const response = await post("/topics", { name: "garden-sensor" }, origin);
+
+		expect(response.status).toBe(403);
+		const names = (await getBridge().getAdminOverview()).map((entry) => entry.name);
+		expect(names).not.toContain("garden-sensor");
+	});
+});
+
+describe("画面", () => {
+	it("CSP などのセキュリティヘッダーを設定し、キャッシュさせない", async () => {
+		const response = await get(await signToken());
+
+		const csp = response.headers.get("content-security-policy") ?? "";
+		expect(csp).toContain("default-src 'none'");
+		expect(csp).toContain("form-action 'self'");
+		expect(csp).toContain("frame-ancestors 'none'");
+		expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+		expect(response.headers.get("cache-control")).toBe("no-store");
+	});
+
+	it("名前・種類・監視先・opaque ID・連番・直近のエラーを表示する", async () => {
+		await getBridge().recordSourceError("discord", "Discord API がステータス 429 を返しました");
+
+		const html = await (await get(await signToken())).text();
+
+		expect(html).toContain("discord-ietter");
+		expect(html).toContain("discord");
+		expect(html).toContain("1000");
+		expect(html).toContain("topic-id-discord");
+		expect(html).toContain("ステータス 429");
+	});
+
+	it("保存された値を HTML エスケープして表示する", async () => {
+		await getBridge().recordSourceError("discord", `<script>alert("侵入")</script>`);
+
+		const html = await (await get(await signToken())).text();
+
+		expect(html).not.toContain("<script>");
+		expect(html).toContain("&lt;script&gt;");
+	});
+
+	it("書き込みシークレットのハッシュを表示しない", async () => {
+		const hash = await runInDurableObject(getBridge(), (_instance, state) =>
+			state.storage.sql
+				.exec<{ write_secret_hash: string }>("SELECT write_secret_hash FROM topics WHERE name = 'mac-script'")
+				.one().write_secret_hash,
+		);
+
+		expect(await (await get(await signToken())).text()).not.toContain(hash);
+	});
+
+	it("doorbell-admin の設定に Discord と Cosense のトークンがない", () => {
+		expect(adminConfigSource).toContain("EVENT_BRIDGE:");
+		expect(adminConfigSource).not.toMatch(/^\s*DISCORD_BOT_TOKEN:/m);
+		expect(adminConfigSource).not.toMatch(/^\s*COSENSE_PAT:/m);
+	});
+});
+
+describe("操作", () => {
+	it("監視対象を追加すると一覧へ戻り、一覧に現れる", async () => {
+		const response = await post("/sources", {
+			type: "discord",
+			target: "2000",
+			excludedUserId: "9999",
+			topic: "discord-garden",
+		});
+
+		expect(response.status).toBe(303);
+		expect(response.headers.get("location")).toBe("/");
+		expect(await (await get(await signToken())).text()).toContain("discord-garden");
+	});
+
+	it("API の確認に失敗したら理由を表示し、保存しない", async () => {
+		vi.restoreAllMocks();
+		mockExternal(403);
+
+		const response = await post("/sources", {
+			type: "discord",
+			target: "2000",
+			excludedUserId: "9999",
+			topic: "discord-garden",
+		});
+
+		const html = await response.text();
+		expect(response.status).toBe(400);
+		expect(html).toContain("403");
+		expect(html).not.toContain("応答本文の秘密");
+		const names = (await getBridge().getAdminOverview()).map((entry) => entry.name);
+		expect(names).not.toContain("discord-garden");
+	});
+
+	it.each([
+		["未対応の種類", { type: "slack", target: "2000", excludedUserId: "9999", topic: "slack-garden" }],
+		["必須項目の欠け", { type: "discord", target: "2000" }],
+	])("%s の追加は 400 を返す", async (_label, fields: Record<string, string>) => {
+		expect((await post("/sources", fields)).status).toBe(400);
+	});
+
+	it("監視対象を無効化し、再開できる", async () => {
+		expect((await post("/sources/discord/disable")).status).toBe(303);
+		let sources = await getBridge().getPollSources();
+		expect(sources.map((source) => source.id)).toEqual(["cosense"]);
+
+		expect((await post("/sources/discord/resume")).status).toBe(303);
+		sources = await getBridge().getPollSources();
+		expect(sources.map((source) => source.id)).toContain("discord");
+	});
+
+	it("監視対象を削除できる", async () => {
+		expect((await post("/sources/discord/delete")).status).toBe(303);
+
+		const names = (await getBridge().getAdminOverview()).map((entry) => entry.name);
+		expect(names).not.toContain("discord-ietter");
+	});
+
+	it("外部トピックを作成すると発行時だけシークレットを表示する", async () => {
+		const response = await post("/topics", { name: "garden-sensor" });
+
+		expect(response.status).toBe(200);
+		expect(response.headers.get("cache-control")).toBe("no-store");
+		const secret = issuedSecret(await response.text());
+		expect(await (await get(await signToken())).text()).not.toContain(secret);
+	});
+
+	it("シークレットを再発行すると新しい値を表示する", async () => {
+		const first = issuedSecret(await (await post("/topics", { name: "garden-sensor" })).text());
+
+		const second = issuedSecret(await (await post("/topics/garden-sensor/rotate")).text());
+
+		expect(second).not.toBe(first);
+	});
+
+	it("外部トピックを削除できるが、監視対象のトピックは削除できない", async () => {
+		expect((await post("/topics/mac-script/delete")).status).toBe(303);
+		expect((await post("/topics/discord-ietter/delete")).status).toBe(400);
+
+		const names = (await getBridge().getAdminOverview()).map((entry) => entry.name);
+		expect(names).toEqual(["discord-ietter", "cosense"]);
+	});
+
+	it("削除の操作には確認用の必須チェックボックスがある", async () => {
+		const html = await (await get(await signToken())).text();
+
+		expect(html).toMatch(/<input[^>]*type="checkbox"[^>]*required/);
+	});
+
+	it.each([
+		["GET", "/sources"],
+		["POST", "/unknown"],
+		["POST", "/sources/discord/unknown"],
+		["POST", "/topics/mac-script/unknown"],
+	])("%s %s は 404 を返す", async (method, path) => {
+		const headers = { "Cf-Access-Jwt-Assertion": await signToken(), Origin: ADMIN_ORIGIN };
+		const response = await admin.fetch(new Request(`${ADMIN_ORIGIN}${path}`, { method, headers }), adminEnv);
+
+		expect(response.status).toBe(404);
+	});
+});

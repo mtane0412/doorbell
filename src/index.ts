@@ -4,20 +4,17 @@
  * 「signal（認証なし・内容なし）」と「実データ（認証あり）」を分離して中継する。
  * 仕様は docs/design.md を参照すること。
  */
+import { BRIDGE_NAME } from "./bridge-name.ts";
 import { hasValidBearer, hasValidBearerHash, secretsMatch } from "./auth.ts";
 import { pollCosense } from "./cosense.ts";
 import { pollDiscord } from "./discord.ts";
 import { EventBridge, type EventInput, type PollSource } from "./event-bridge.ts";
-import { PollError } from "./poll-error.ts";
+import { describePollError } from "./poll-error.ts";
 
 export { EventBridge };
 
 /** POST body のサイズ上限 */
 const MAX_EVENT_BYTES = 4 * 1024;
-/** Durable Object は全体で1個だけ使う */
-const BRIDGE_NAME = "main";
-/** 内容を保証できないエラーの代わりに last_error へ保存する文言 */
-const UNKNOWN_POLL_ERROR = "確認に失敗しました";
 
 type Bridge = DurableObjectStub<EventBridge>;
 
@@ -93,11 +90,6 @@ async function handleGetSignal(env: Env, signalKey: string): Promise<Response> {
 	return Response.json({ topics }, { headers: { "Cache-Control": "no-store" } });
 }
 
-/** last_error に保存する文言を決める。PollError 以外のメッセージは内容を保証できないため保存しない */
-function toLastError(error: unknown): string {
-	return error instanceof PollError ? error.message : UNKNOWN_POLL_ERROR;
-}
-
 /** 監視対象の種類に応じた producer で確認する */
 function pollByType(env: Env, bridge: Bridge, source: PollSource): Promise<void> {
 	switch (source.type) {
@@ -128,7 +120,7 @@ async function pollSource(env: Env, bridge: Bridge, source: PollSource): Promise
 	try {
 		await pollByType(env, bridge, source);
 	} catch (error) {
-		await saveLastError(toLastError(error));
+		await saveLastError(describePollError(error));
 		throw error;
 	}
 	await saveLastError(null);

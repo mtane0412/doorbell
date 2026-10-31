@@ -67,6 +67,15 @@ function newestPage(pages: CosensePage[]): CosensePage | undefined {
 }
 
 /**
+ * プロジェクトを読めることを API を1回呼んで確認する
+ *
+ * @throws プロジェクトの指定の誤りや権限不足で API が失敗した場合
+ */
+export async function verifyCosenseProject(env: Env, projectName: string): Promise<void> {
+	await fetchPages(env, projectName);
+}
+
+/**
  * ページの更新を確認し、確認位置とイベントを記録する
  *
  * 確認位置は最終更新時刻（UNIX 秒）である。初回は既存のページを通知せず、確認位置だけを記録する。

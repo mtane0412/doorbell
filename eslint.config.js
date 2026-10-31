@@ -4,7 +4,7 @@
 import tseslint from "typescript-eslint";
 
 export default tseslint.config(
-	{ ignores: ["node_modules/", "dist/", ".cloudflare/", ".wrangler/"] },
+	{ ignores: ["**/node_modules/", "**/dist/", "**/.cloudflare/", "**/.wrangler/"] },
 	tseslint.configs.recommended,
 	{
 		rules: {

@@ -132,7 +132,25 @@ Worker 内蔵 producer しか使わないトピックは、`TOPIC_WRITE_SECRETS`
 
 ## トピックを追加する
 
-移行の後は、シークレットの変更ではトピックを追加できません。トピックの追加は、管理ページ `doorbell-admin`（未実装）で行います。
+移行の後は、シークレットの変更ではトピックを追加できません。トピックの追加は、管理ページ `doorbell-admin` で行います。
+
+## 管理ページ `doorbell-admin`
+
+監視対象の追加・無効化・再開・削除、外部トピックの作成・削除、書き込みシークレットの再発行を行う別の Worker です。コードは `admin/` にあります。Discord と Cosense のトークンは持ちません。
+
+デプロイの手順は次のとおりです。
+
+1. リポジトリのルートで `npm run deploy` を実行し、`doorbell` を先にデプロイします。
+2. `admin/` で `npm install` と `npx cf deploy` を実行します。シークレットが未設定の間は、すべてのリクエストが失敗し、画面は開けません。
+3. ダッシュボードの **Workers & Pages** で `doorbell-admin` を開き、**Settings** > **Domains & Routes** で `workers.dev` の **Enable Cloudflare Access** を有効にします。Preview URL が有効な場合は、同様に保護するか無効にします。
+4. 表示された値を、`admin/` でシークレットとして登録します。
+
+| 名前 | 内容 |
+|---|---|
+| `ACCESS_TEAM_DOMAIN` | `TEAM_DOMAIN` の値（`https://<チーム名>.cloudflareaccess.com`） |
+| `ACCESS_AUD` | `POLICY_AUD` の値 |
+
+監視対象を追加した後は、たねハウスの規則ファイルにもトピックを追加します。
 
 ## 構成
 
@@ -146,5 +164,10 @@ Worker 内蔵 producer しか使わないトピックは、`TOPIC_WRITE_SECRETS`
 | `src/config.ts` | `TOPICS` と `TOPIC_WRITE_SECRETS` の解析 |
 | `src/migration.ts` | スキーマ移行と旧シークレットの取り込み |
 | `src/poll-error.ts` | `last_error` に記録してよいエラー |
+| `src/bridge-name.ts` | `doorbell` と `doorbell-admin` で共有する Durable Object の名前 |
+| `admin/src/index.ts` | 管理ページのルーティングと操作 |
+| `admin/src/access.ts` | Cloudflare Access の JWT の検証 |
+| `admin/src/page.ts` | 管理ページの HTML の生成 |
+| `admin/cloudflare.config.ts` | `doorbell-admin` の設定 |
 | `cloudflare.config.ts` | Worker、Cron、バインディングの設定 |
 | `docs/design.md` | 設計メモ |
