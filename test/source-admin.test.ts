@@ -211,13 +211,47 @@ describe("監視対象の無効化と再開", () => {
 		const sourceId = await addSourceAndGetId(GARDEN_CHANNEL);
 		await getBridge().disableSource(sourceId);
 
-		await getBridge().commitProducerPoll(sourceId, "600", {
+		await getBridge().commitProducerPoll(sourceId, null, "600", {
 			topic: GARDEN_CHANNEL.topic,
 			input: { kind: "discord.message", summary: "新着1件" },
 		});
 
 		expect(await readCursor(sourceId)).toBeNull();
 		expect((await (await readEvents(0, GARDEN_CHANNEL.topic)).json()) as object).toMatchObject({ latest_seq: 0 });
+	});
+
+	it("確認の途中で無効化と再開が行われた場合は、古い確認の結果を記録しない", async () => {
+		// 前提: 確認位置 500 で確認を始めた後、API の応答を待つ間に無効化と再開が行われた
+		mockApisOk();
+		const sourceId = await addSourceAndGetId(GARDEN_CHANNEL);
+		await writeCursor(sourceId, "500");
+		await getBridge().disableSource(sourceId);
+		await getBridge().resumeSource(sourceId);
+
+		await getBridge().commitProducerPoll(sourceId, "500", "600", {
+			topic: GARDEN_CHANNEL.topic,
+			input: { kind: "discord.message", summary: "新着1件" },
+		});
+
+		// 検証: 再開で消した確認位置は書き戻されず、停止前の更新を通知しない
+		expect(await readCursor(sourceId)).toBeNull();
+		expect((await (await readEvents(0, GARDEN_CHANNEL.topic)).json()) as object).toMatchObject({ latest_seq: 0 });
+	});
+
+	it("確認を始めた時点から確認位置が変わっていなければ、結果を記録する", async () => {
+		// 前提: 確認位置 500 で確認を始め、その間に操作はなかった
+		mockApisOk();
+		const sourceId = await addSourceAndGetId(GARDEN_CHANNEL);
+		await writeCursor(sourceId, "500");
+
+		await getBridge().commitProducerPoll(sourceId, "500", "600", {
+			topic: GARDEN_CHANNEL.topic,
+			input: { kind: "discord.message", summary: "新着1件" },
+		});
+
+		// 検証: 確認位置が進み、イベントが1件追加される
+		expect(await readCursor(sourceId)).toBe("600");
+		expect((await (await readEvents(0, GARDEN_CHANNEL.topic)).json()) as object).toMatchObject({ latest_seq: 1 });
 	});
 });
 
@@ -226,7 +260,7 @@ describe("監視対象の削除", () => {
 		mockApisOk();
 		const sourceId = await addSourceAndGetId(GARDEN_CHANNEL);
 		await writeCursor(sourceId, "500");
-		await getBridge().commitProducerPoll(sourceId, "501", {
+		await getBridge().commitProducerPoll(sourceId, "500", "501", {
 			topic: GARDEN_CHANNEL.topic,
 			input: { kind: "discord.message", summary: "新着1件" },
 		});

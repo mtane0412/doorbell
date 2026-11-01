@@ -374,10 +374,13 @@ export class EventBridge extends DurableObject<Env> {
 	 *
 	 * 片方だけが成功すると、イベントの重複や取りこぼしになるためである。
 	 *
+	 * @param expectedCursor 確認を始めた時点の確認位置。未記録なら null
+	 * @param cursor 新しい確認位置
 	 * @param event 追加するイベント。新着がなければ null
 	 */
 	async commitProducerPoll(
 		producer: string,
+		expectedCursor: string | null,
 		cursor: string,
 		event: { topic: string; input: EventInput } | null,
 	): Promise<void> {
@@ -385,6 +388,14 @@ export class EventBridge extends DurableObject<Env> {
 		const isActive =
 			this.ctx.storage.sql.exec("SELECT 1 FROM sources WHERE id = ? AND enabled = 1", producer).toArray().length > 0;
 		if (!isActive) {
+			return;
+		}
+		// 応答を待つ間に無効化と再開が行われると、有効のままでも確認位置が消えている。再開前の結果を書き戻さないよう捨てる
+		const currentCursor =
+			this.ctx.storage.sql
+				.exec<{ cursor: string }>("SELECT cursor FROM producer_state WHERE producer = ?", producer)
+				.toArray()[0]?.cursor ?? null;
+		if (currentCursor !== expectedCursor) {
 			return;
 		}
 		this.ctx.storage.transactionSync(() => {

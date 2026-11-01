@@ -127,7 +127,7 @@ npm install
 
 | 名前 | 内容 |
 |---|---|
-| `READ_TOKEN` | `GET /events/{topic}` の読み取りトークン |
+| `READ_TOKEN` | `GET /events/{topic}` と `GET /topics` の読み取りトークン |
 | `SIGNAL_KEY` | `GET /signal/{signal_key}` の URL に使う推測困難な値 |
 | `DISCORD_BOT_TOKEN` | Discord ボットのトークン |
 | `COSENSE_PAT` | Cosense の Personal Access Token |
@@ -162,7 +162,7 @@ npm install
 | `src/event-bridge.ts` | イベントと連番を保管する Durable Object |
 | `src/discord.ts` | Discord の新着を確認する producer |
 | `src/cosense.ts` | Cosense のページ更新を確認する producer |
-| `src/auth.ts` | シークレットの定数時間比較 |
+| `src/auth.ts` | シークレットの定数時間比較、生成、ハッシュ化 |
 | `src/schema.ts` | Durable Object のスキーマ |
 | `src/poll-error.ts` | `last_error` に記録してよいエラー |
 | `src/bridge-name.ts` | `doorbell` と `doorbell-admin` で共有する Durable Object の名前 |

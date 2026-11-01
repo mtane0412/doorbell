@@ -1,7 +1,7 @@
 /**
  * Cosense プロジェクトのページ更新を REST で確認し、イベントとして記録する producer
  *
- * イベントには件数と最新のページIDだけを載せ、タイトルや本文は載せない。
+ * イベントには件数と最新のページID、プロジェクト名だけを載せ、タイトルや本文は載せない。
  * 自分のボットの更新を除外し、エージェントの編集で起床が連鎖することを防ぐ。
  *
  * 注意: API は各ページの最終更新者しか返さない。人の更新の直後にボットが同じページを更新すると、
@@ -96,7 +96,7 @@ export async function pollCosense(
 		return;
 	}
 	if (source.cursor === null) {
-		await bridge.commitProducerPoll(source.id, String(newest.updated), null);
+		await bridge.commitProducerPoll(source.id, source.cursor, String(newest.updated), null);
 		return;
 	}
 
@@ -114,5 +114,5 @@ export async function pollCosense(
 				data: { count: fromOthers.length, project: source.target },
 			}
 		: null;
-	await bridge.commitProducerPoll(source.id, String(newest.updated), input ? { topic: source.topic, input } : null);
+	await bridge.commitProducerPoll(source.id, source.cursor, String(newest.updated), input ? { topic: source.topic, input } : null);
 }

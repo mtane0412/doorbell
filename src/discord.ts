@@ -1,7 +1,7 @@
 /**
  * Discord チャンネルの新着を REST で確認し、イベントとして記録する producer
  *
- * イベントには件数と最新メッセージIDだけを載せ、本文は載せない。
+ * イベントには件数と最新メッセージID、チャンネルIDだけを載せ、本文は載せない。
  * 自分のボットの投稿を除外し、エージェントの返信で起床が連鎖することを防ぐ。
  */
 import type { EventBridge, EventInput, PollSource } from "./event-bridge.ts";
@@ -77,7 +77,7 @@ export async function pollDiscord(
 	if (source.cursor === null) {
 		const [latest] = await fetchMessages(env, source.target, "limit=1");
 		if (latest) {
-			await bridge.commitProducerPoll(source.id, latest.id, null);
+			await bridge.commitProducerPoll(source.id, source.cursor, latest.id, null);
 		}
 		return;
 	}
@@ -97,5 +97,5 @@ export async function pollDiscord(
 				data: { count: fromOthers.length, channel_id: source.target },
 			}
 		: null;
-	await bridge.commitProducerPoll(source.id, newest.id, input ? { topic: source.topic, input } : null);
+	await bridge.commitProducerPoll(source.id, source.cursor, newest.id, input ? { topic: source.topic, input } : null);
 }
