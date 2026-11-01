@@ -4,7 +4,9 @@
  * docs/design.md の「エンドポイント」「`GET /events/{topic}` の応答」の仕様に対応する。
  */
 import { beforeEach, describe, expect, it } from "vitest";
+import { env } from "cloudflare:workers";
 import { evictDurableObject, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
+import worker from "../src/index.ts";
 import {
 	INTERNAL_TOPIC,
 	READ_TOKEN,
@@ -71,6 +73,44 @@ describe("POST /events/{topic}", () => {
 		const response = await postEvent("外部からの投稿", INTERNAL_TOPIC);
 
 		expect(response.status).toBe(401);
+	});
+
+	it.each([
+		["シークレットを再発行した", () => getBridge().rotateWriteSecret(WRITABLE_TOPIC)],
+		["トピックを削除した", () => getBridge().deleteExternalTopic(WRITABLE_TOPIC)],
+	])("本文の受信中に%sら、検証済みの投稿を拒否する", async (_label, changeTopic) => {
+		// 前提: Worker はシークレットを検証した後に本文を読む
+		// 本文を読み始める瞬間にトピックを変更し、「検証済みで本文の受信を待っている投稿」の状況を作る
+		const staleRequest = new Request<unknown, IncomingRequestCfProperties>(
+			`https://doorbell.test/events/${WRITABLE_TOPIC}`,
+			{
+				method: "POST",
+				headers: bearer(WRITE_SECRET),
+				body: JSON.stringify({ kind: "test.event", summary: "変更後に届いた投稿" }),
+			},
+		);
+		const readBody = staleRequest.arrayBuffer.bind(staleRequest);
+		let changedDuringBodyRead = false;
+		staleRequest.arrayBuffer = async () => {
+			changedDuringBodyRead = (await changeTopic()).ok;
+			return readBody();
+		};
+
+		// 操作: 投稿を Worker のハンドラーへ直接渡す
+		const response = await worker.fetch(staleRequest, env);
+
+		// 検証: 投稿は拒否され、イベントは追加されず、連番も進まない
+		expect(changedDuringBodyRead).toBe(true);
+		expect(response.status).toBe(401);
+		const stored = await runInDurableObject(getBridge(), (_instance, state) => ({
+			seq: state.storage.sql
+				.exec<{ seq: number }>("SELECT seq FROM topics WHERE name = ?", WRITABLE_TOPIC)
+				.one().seq,
+			eventCount: state.storage.sql
+				.exec<{ total: number }>("SELECT COUNT(*) AS total FROM events WHERE topic = ?", WRITABLE_TOPIC)
+				.one().total,
+		}));
+		expect(stored).toEqual({ seq: 0, eventCount: 0 });
 	});
 
 	it("未登録のトピックなら 404 を返す", async () => {

@@ -312,14 +312,32 @@ export class EventBridge extends DurableObject<Env> {
 	}
 
 	/**
-	 * イベントを1件追加し、割り当てた連番を返す
+	 * 外部の producer のイベントを1件追加し、割り当てた連番を返す
 	 *
-	 * @param topic 登録済みのトピック名（呼び出し側で確認済みであること）
+	 * 認証の後、本文の受信を待つ間にシークレットの再発行やトピックの削除が起こりうる。
+	 * 古いシークレットを直ちに失効させるため、追加と同じトランザクションで検証時のハッシュが現在も有効かを確認する。
+	 * 比較するのは認証済みの保存値であり、リクエストの値ではないため、定数時間で比較する必要はない。
+	 *
+	 * @param topic トピック名
+	 * @param verifiedWriteSecretHash 認証の時点で getTopicWriteConfig が返したハッシュ
 	 * @param event 追加するイベント
-	 * @throws トピックが未登録または論理削除済みの場合
+	 * @returns 割り当てた連番。ハッシュが現在の値と異なる、またはトピックが削除済みなら null
 	 */
-	async appendEvent(topic: string, event: EventInput): Promise<number> {
-		const seq = this.ctx.storage.transactionSync(() => this.insertEvent(topic, event));
+	async appendEvent(topic: string, verifiedWriteSecretHash: string, event: EventInput): Promise<number | null> {
+		const seq = this.ctx.storage.transactionSync(() => {
+			const isCurrent =
+				this.ctx.storage.sql
+					.exec(
+						"SELECT 1 FROM topics WHERE name = ? AND write_secret_hash = ? AND deleted_at_ms IS NULL",
+						topic,
+						verifiedWriteSecretHash,
+					)
+					.toArray().length > 0;
+			return isCurrent ? this.insertEvent(topic, event) : null;
+		});
+		if (seq === null) {
+			return null;
+		}
 		await this.ensureAlarm();
 		return seq;
 	}

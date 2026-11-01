@@ -66,7 +66,10 @@ async function handlePostEvent(request: Request, env: Env, topic: string): Promi
 	if (!input) {
 		return new Response("Bad Request", { status: 400 });
 	}
-	const seq = await getBridge(env).appendEvent(topic, input);
+	const seq = await getBridge(env).appendEvent(topic, writeConfig.writeSecretHash, input);
+	if (seq === null) {
+		return new Response("Unauthorized", { status: 401 });
+	}
 	return Response.json({ seq }, { status: 201 });
 }
 
