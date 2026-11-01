@@ -9,7 +9,8 @@ doorbell は「signal（認証なし・内容なし）」と「実データ（�
                                           │
                                           ├─ Durable Object（連番とイベントの保管）
                                           ├─ GET /signal/{signal_key} ◀── Hook（変化の検知）
-                                          └─ GET /events/{topic}      ◀── エージェント（実データの取得）
+                                          ├─ GET /events/{topic}      ◀── エージェント（実データの取得）
+                                          └─ GET /topics              ◀── エージェント（未知の ID の特定）
 ```
 
 設計の背景と Muse 側の仕様は [docs/design.md](docs/design.md) に記載しています。
@@ -21,6 +22,7 @@ doorbell は「signal（認証なし・内容なし）」と「実データ（�
 | `POST /events/{topic}` | `Authorization: Bearer <トピック別シークレット>` | イベントを1件追加し、連番を進めます |
 | `GET /signal/{signal_key}` | なし（推測困難な URL） | 全トピックの opaque ID と連番、最終更新時刻を返します |
 | `GET /events/{topic}?since={seq}` | `Authorization: Bearer <READ_TOKEN>` | 指定した連番より後のイベントを返します |
+| `GET /topics` | `Authorization: Bearer <READ_TOKEN>` | opaque ID とトピック名、監視先の対応を返します |
 
 ### イベントを追加する
 
@@ -74,6 +76,19 @@ body の上限は 4 KB です。トークンや個人情報は載せないでく
 ```
 
 イベントはトピックごとに最新20件までを、最長7日間保持します。連番は削除されません。`since < oldest_seq - 1` の場合は、保持範囲外に欠落があります。
+
+### トピックの一覧を読む
+
+`GET /topics` の応答です。`/signal` に現れた未知の opaque ID を、エージェントが特定するために使います。論理削除済みのトピックは含みません。外部トピックの `source` は `null` になります。
+
+```json
+{
+  "topics": [
+    { "id": "opaque ID", "name": "discord-general", "source": { "type": "discord", "target": "チャンネルID" } },
+    { "id": "opaque ID", "name": "mac-script", "source": null }
+  ]
+}
+```
 
 ## 監視対象
 
@@ -137,7 +152,7 @@ npm install
 | `ACCESS_TEAM_DOMAIN` | `TEAM_DOMAIN` の値（`https://<チーム名>.cloudflareaccess.com`） |
 | `ACCESS_AUD` | `POLICY_AUD` の値 |
 
-監視対象を追加した後は、たねハウスの規則ファイルにもトピックを追加します。
+監視対象を追加すると、Muse が `/signal` で未知の ID を検知し、`GET /topics` で特定して、起きたら何をするかを確認します。回答はたねハウスの規則ファイルに追加されます。
 
 ## 構成
 

@@ -129,6 +129,40 @@ describe("GET /signal/{signal_key}", () => {
 	});
 });
 
+describe("GET /topics", () => {
+	it("トークンがないなら 401 を返す", async () => {
+		const response = await request("/topics");
+
+		expect(response.status).toBe(401);
+	});
+
+	it("トークンが誤っているなら 401 を返す", async () => {
+		const response = await request("/topics", { headers: bearer("誤った読み取りトークン") });
+
+		expect(response.status).toBe(401);
+	});
+
+	it("opaque ID からトピック名と監視先を引ける一覧を登録順に返す", async () => {
+		// 前提: resetBridge で、監視対象つきのトピックが2つと外部トピックが1つ登録されている
+		const response = await request("/topics", { headers: bearer(READ_TOKEN) });
+
+		expect(response.status).toBe(200);
+		expect(await response.json()).toEqual({
+			topics: [
+				{ id: "topic-id-discord", name: "discord-ietter", source: { type: "discord", target: "1000" } },
+				{ id: "topic-id-mac", name: "mac-script", source: null },
+				{ id: "topic-id-cosense", name: "cosense", source: { type: "cosense", target: "test-project" } },
+			],
+		});
+	});
+
+	it("POST は受け付けない", async () => {
+		const response = await request("/topics", { method: "POST", headers: bearer(READ_TOKEN) });
+
+		expect(response.status).toBe(404);
+	});
+});
+
 describe("GET /events/{topic}", () => {
 	it("トークンがないなら 401 を返す", async () => {
 		const response = await request(`/events/${WRITABLE_TOPIC}?since=0`);
@@ -222,6 +256,15 @@ describe("論理削除されたトピック", () => {
 		await softDeleteWritableTopic();
 
 		const body = (await (await request(SIGNAL_PATH)).json()) as SignalBody;
+
+		expect(body.topics.map((topic) => topic.id)).toEqual(["topic-id-discord", "topic-id-cosense"]);
+	});
+
+	it("/topics に出さない", async () => {
+		await softDeleteWritableTopic();
+
+		const response = await request("/topics", { headers: bearer(READ_TOKEN) });
+		const body = (await response.json()) as { topics: { id: string }[] };
 
 		expect(body.topics.map((topic) => topic.id)).toEqual(["topic-id-discord", "topic-id-cosense"]);
 	});

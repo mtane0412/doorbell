@@ -90,6 +90,25 @@ async function handleGetSignal(env: Env, signalKey: string): Promise<Response> {
 	return Response.json({ topics }, { headers: { "Cache-Control": "no-store" } });
 }
 
+/**
+ * opaque ID からトピック名と監視先を引く一覧を返す
+ *
+ * /signal に現れた未知の ID を、エージェントが特定するために使う。
+ * 必要な項目だけを選び、除外するユーザーIDや直近のエラーなどの管理用の情報は返さない。
+ */
+async function handleGetTopics(request: Request, env: Env): Promise<Response> {
+	if (!(await hasValidBearer(request, env.READ_TOKEN))) {
+		return new Response("Unauthorized", { status: 401 });
+	}
+	const overview = await getBridge(env).getAdminOverview();
+	const topics = overview.map(({ opaqueId, name, source }) => ({
+		id: opaqueId,
+		name,
+		source: source && { type: source.type, target: source.target },
+	}));
+	return Response.json({ topics });
+}
+
 /** 監視対象の種類に応じた producer で確認する */
 function pollByType(env: Env, bridge: Bridge, source: PollSource): Promise<void> {
 	switch (source.type) {
@@ -130,6 +149,9 @@ export default {
 	async fetch(request, env) {
 		const url = new URL(request.url);
 		const [, resource, key, ...rest] = url.pathname.split("/");
+		if (url.pathname === "/topics" && request.method === "GET") {
+			return handleGetTopics(request, env);
+		}
 		if (key && rest.length === 0) {
 			if (resource === "events" && request.method === "POST") {
 				return handlePostEvent(request, env, key);
