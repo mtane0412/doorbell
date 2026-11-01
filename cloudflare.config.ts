@@ -1,8 +1,8 @@
 /**
  * doorbell Worker の Cloudflare 設定
  *
- * 値はすべてシークレットとして登録し、リポジトリに置かない。
- * TOPICS はトピック名と opaque ID の対応の唯一の定義であり、対応をリポジトリから読めないようシークレットとする。
+ * 認証情報はシークレットとして登録し、リポジトリに置かない。
+ * トピックと監視対象の設定は Durable Object に保管し、管理ページ doorbell-admin から変更する。
  */
 import { bindings, defineConfig, exports, triggers } from "cf/config";
 import * as entrypoint from "./src/index.ts" with { type: "cf-worker" };
@@ -22,16 +22,10 @@ export default defineConfig({
 		triggers: [triggers.scheduled({ schedule: POLL_SCHEDULE })],
 		env: {
 			EVENT_BRIDGE: bindings.durableObject({ worker: WORKER_NAME, exportName: "EventBridge" }),
-			TOPICS: bindings.secret(),
-			TOPIC_WRITE_SECRETS: bindings.secret(),
 			READ_TOKEN: bindings.secret(),
 			SIGNAL_KEY: bindings.secret(),
 			DISCORD_BOT_TOKEN: bindings.secret(),
-			DISCORD_CHANNEL_ID: bindings.secret(),
-			DISCORD_BOT_USER_ID: bindings.secret(),
 			COSENSE_PAT: bindings.secret(),
-			COSENSE_PROJECT: bindings.secret(),
-			COSENSE_BOT_USER_ID: bindings.secret(),
 		},
 	},
 });

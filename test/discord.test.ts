@@ -18,7 +18,7 @@ function mockDiscordMessages(messages: DiscordMessage[]) {
 	return vi.spyOn(globalThis, "fetch").mockImplementation(async () => Response.json(messages));
 }
 
-/** 移行で作られた監視対象を、最新の確認位置とともに取得して確認する */
+/** 共通の前提の監視対象を、最新の確認位置とともに取得して確認する */
 async function runCron(): Promise<void> {
 	const bridge = getBridge();
 	const source = (await bridge.getPollSources()).find((candidate) => candidate.type === "discord");
