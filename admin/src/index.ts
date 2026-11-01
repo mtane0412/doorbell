@@ -26,7 +26,7 @@ function plainResponse(body: string, status: number): Response {
 	return new Response(body, { status, headers: { "Cache-Control": "no-store" } });
 }
 
-/** 一覧の画面を返す。インラインスタイルだけを nonce で許可し、スクリプトは一切許可しない */
+/** 一覧の画面を返す。インラインのスタイルとスクリプトは応答ごとの nonce でだけ許可し、外部の読み込みは許可しない */
 async function pageResponse(bridge: Bridge, status: number, notice?: Notice): Promise<Response> {
 	const nonce = crypto.randomUUID();
 	const html = renderPage(await bridge.getAdminOverview(), nonce, notice);
@@ -34,7 +34,7 @@ async function pageResponse(bridge: Bridge, status: number, notice?: Notice): Pr
 		status,
 		headers: {
 			"Content-Type": "text/html; charset=utf-8",
-			"Content-Security-Policy": `default-src 'none'; style-src 'nonce-${nonce}'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'`,
+			"Content-Security-Policy": `default-src 'none'; style-src 'nonce-${nonce}'; script-src 'nonce-${nonce}'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'`,
 			"X-Content-Type-Options": "nosniff",
 			"Referrer-Policy": "same-origin",
 			"Cache-Control": "no-store",
@@ -84,7 +84,9 @@ async function handleAddSource(request: Request, bridge: Bridge): Promise<Respon
 	if (!source) {
 		return pageResponse(bridge, 400, { kind: "error", message: "入力項目が不足しています" });
 	}
-	return operationResponse(bridge, await bridge.addSource(source));
+	const result = await bridge.addSource(source);
+	// 入力をやり直さずに済むよう、失敗したら入力を画面へ戻す
+	return result.ok ? redirectToList() : pageResponse(bridge, 400, { kind: "error", message: result.error, draft: source });
 }
 
 async function handleCreateTopic(request: Request, bridge: Bridge): Promise<Response> {

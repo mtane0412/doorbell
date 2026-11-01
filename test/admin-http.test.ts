@@ -10,6 +10,7 @@ import { runInDurableObject } from "cloudflare:test";
 import { exportJWK, generateKeyPair, SignJWT } from "jose";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import admin from "../admin/src/index.ts";
+import { renderPage } from "../admin/src/page.ts";
 import adminConfigSource from "../admin/cloudflare.config.ts?raw";
 import { getBridge, resetBridge } from "./helpers.ts";
 
@@ -233,6 +234,131 @@ describe("画面", () => {
 		expect(await (await get(await signToken())).text()).not.toContain(hash);
 	});
 
+	it("スクリプトは応答ごとの nonce でだけ許可する", async () => {
+		const response = await get(await signToken());
+
+		const csp = response.headers.get("content-security-policy") ?? "";
+		const nonce = /script-src 'nonce-([^']+)'/.exec(csp)?.[1];
+		expect(nonce).toBeDefined();
+		expect(csp).not.toContain("unsafe-inline");
+		expect(await response.text()).toContain(`<script nonce="${nonce}">`);
+	});
+
+	it("最終更新を相対時刻で表示し、元の時刻を属性に残す", () => {
+		const threeHoursAgo = new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString();
+		const topic = {
+			name: "mac-script",
+			opaqueId: "topic-id-mac",
+			seq: 4,
+			updatedAt: threeHoursAgo,
+			hasWriteSecret: true,
+			source: null,
+		};
+
+		const html = renderPage([topic], "test-nonce");
+
+		expect(html).toContain("3時間前");
+		expect(html).toContain(`datetime="${threeHoursAgo}"`);
+	});
+
+	it("監視対象ごとに除外するユーザーIDを表示する", async () => {
+		const html = await (await get(await signToken())).text();
+
+		expect(html).toContain("user-id-tanehouse");
+	});
+
+	it("監視対象がなければ、空であることを表示する", async () => {
+		await post("/sources/discord/delete");
+		await post("/sources/cosense/delete");
+
+		const html = await (await get(await signToken())).text();
+
+		expect(html).toContain("監視対象はまだありません");
+	});
+});
+
+describe("除外するユーザーIDの自動入力", () => {
+	/** 指定した種類の追加フォームの HTML を取り出す */
+	function addForm(html: string, type: string): string {
+		const forms = html.match(/<form[^>]*action="\/sources".*?<\/form>/gs) ?? [];
+		const form = forms.find((candidate) => candidate.includes(`name="type" value="${type}"`));
+		if (!form) {
+			throw new Error(`${type} の追加フォームが画面にありません`);
+		}
+		return form;
+	}
+
+	/** 除外するユーザーIDの入力欄の HTML を取り出す */
+	function excludedUserInput(form: string): string {
+		const input = /<input[^>]*name="excludedUserId"[^>]*>/.exec(form)?.[0];
+		if (!input) {
+			throw new Error("除外するユーザーIDの入力欄がありません");
+		}
+		return input;
+	}
+
+	it("種類ごとに、登録済みの監視対象の値を入力済みにする", async () => {
+		// 前提: Discord は 9999、Cosense は user-id-tanehouse を除外している
+		const html = await (await get(await signToken())).text();
+
+		expect(excludedUserInput(addForm(html, "discord"))).toContain('value="9999"');
+		expect(excludedUserInput(addForm(html, "cosense"))).toContain('value="user-id-tanehouse"');
+	});
+
+	it("同じ種類が複数あれば、最後に追加した監視対象の値を使う", async () => {
+		await post("/sources", { type: "discord", target: "2000", excludedUserId: "8888", topic: "discord-garden" });
+
+		const html = await (await get(await signToken())).text();
+
+		expect(excludedUserInput(addForm(html, "discord"))).toContain('value="8888"');
+		expect(excludedUserInput(addForm(html, "cosense"))).toContain('value="user-id-tanehouse"');
+	});
+
+	it("その種類の監視対象がなければ、空のままにする", async () => {
+		await post("/sources/discord/delete");
+
+		const html = await (await get(await signToken())).text();
+
+		expect(excludedUserInput(addForm(html, "discord"))).not.toContain("value=");
+		expect(excludedUserInput(addForm(html, "cosense"))).toContain('value="user-id-tanehouse"');
+	});
+
+	it("入力済みの値を HTML エスケープする", async () => {
+		await post("/sources", {
+			type: "discord",
+			target: "2000",
+			excludedUserId: `"><script>alert("侵入")</script>`,
+			topic: "discord-garden",
+		});
+
+		const html = await (await get(await signToken())).text();
+
+		expect(html).not.toContain(`<script>alert`);
+	});
+
+	it("追加に失敗したら、入力を残したままダイアログを開いて理由を表示する", async () => {
+		vi.restoreAllMocks();
+		mockExternal(403);
+
+		const response = await post("/sources", {
+			type: "cosense",
+			target: "tanehouse-garden",
+			excludedUserId: "user-id-garden",
+			topic: "cosense-garden",
+		});
+
+		const html = await response.text();
+		const form = addForm(html, "cosense");
+		expect(response.status).toBe(400);
+		expect(form).toContain('value="tanehouse-garden"');
+		expect(form).toContain('value="user-id-garden"');
+		expect(form).toContain('value="cosense-garden"');
+		expect(html).toMatch(/<dialog[^>]*id="add-source"[^>]*\sopen/);
+		expect(/<dialog[^>]*id="add-source".*?<\/dialog>/s.exec(html)?.[0]).toContain("403");
+	});
+});
+
+describe("設定", () => {
 	it("doorbell-admin の設定に Discord と Cosense のトークンがない", () => {
 		expect(adminConfigSource).toContain("EVENT_BRIDGE:");
 		expect(adminConfigSource).not.toMatch(/^\s*DISCORD_BOT_TOKEN:/m);
@@ -322,10 +448,18 @@ describe("操作", () => {
 		expect(names).toEqual(["discord-ietter", "cosense"]);
 	});
 
-	it("削除の操作には確認用の必須チェックボックスがある", async () => {
+	it.each([
+		["監視対象の削除", "/sources/discord/delete"],
+		["外部トピックの削除", "/topics/mac-script/delete"],
+		["シークレットの再発行", "/topics/mac-script/rotate"],
+	])("%s のフォームは確認ダイアログの中にだけある", async (_label, path) => {
 		const html = await (await get(await signToken())).text();
 
-		expect(html).toMatch(/<input[^>]*type="checkbox"[^>]*required/);
+		// 前提: 一覧の行のボタンはダイアログを開くだけで、送信はダイアログの中で行う
+		const dialogs = html.match(/<dialog.*?<\/dialog>/gs) ?? [];
+		expect(dialogs.some((dialog) => dialog.includes(`action="${path}"`))).toBe(true);
+		const outsideDialogs = html.replace(/<dialog.*?<\/dialog>/gs, "");
+		expect(outsideDialogs).not.toContain(`action="${path}"`);
 	});
 
 	it.each([
