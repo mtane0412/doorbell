@@ -39,7 +39,7 @@ body の上限は 4 KB です。トークンや個人情報は載せないでく
 |---|---|
 | `400` | body の JSON または項目が不正である |
 | `401` | シークレットが誤っている、またはトピックに書き込みシークレットが登録されていない |
-| `404` | トピックが `TOPICS` に登録されていない |
+| `404` | トピックが未登録、または論理削除済みである |
 | `413` | body が 4 KB を超えている |
 
 ### signal を確認する
@@ -75,22 +75,19 @@ body の上限は 4 KB です。トークンや個人情報は載せないでく
 
 イベントはトピックごとに最新20件までを、最長7日間保持します。連番は削除されません。`since < oldest_seq - 1` の場合は、保持範囲外に欠落があります。
 
-## Discord の新着検知
+## 監視対象
 
-Worker は Cron で5分おきに監視チャンネルを確認し、新着をトピック `discord-ietter` のイベントとして記録します。イベントには件数と最新メッセージIDだけを載せ、本文は載せません。
+Worker は Cron で5分おきに、管理ページで登録した監視対象を確認し、更新を監視対象ごとのトピックのイベントとして記録します。1件の失敗で他の監視対象の確認を止めません。
 
-- `DISCORD_BOT_USER_ID` のボットの投稿は除外します。エージェントの返信で起床が連鎖することを防ぐためです。
-- 初回は過去の投稿を通知せず、最新メッセージIDだけを記録します。
-- Discord API が失敗した場合は確認位置を進めないため、次回の Cron で再確認します。
+**Discord の新着検知**: イベントには件数と最新メッセージID、チャンネルIDだけを載せ、本文は載せません。
 
-## Cosense の更新検知
+**Cosense の更新検知**: イベントには件数と最新のページID、プロジェクト名だけを載せ、タイトルと本文は載せません。API は最終更新者しか返さないため、人の更新の直後にボットが同じページを更新すると、人の更新は検知できません。ページの削除も検知しません。
 
-Worker は同じ Cron で `COSENSE_PROJECT` のページ一覧を確認し、更新をトピック `cosense` のイベントとして記録します。イベントには件数と最新のページIDだけを載せ、タイトルと本文は載せません。
+共通の動作は次のとおりです。
 
-- `COSENSE_BOT_USER_ID` のユーザーが最後に更新したページは除外します。エージェントの編集で起床が連鎖することを防ぐためです。
-- 初回は既存のページを通知せず、最終更新時刻だけを記録します。
-- Cosense API が失敗した場合は確認位置を進めないため、次回の Cron で再確認します。Discord と Cosense は互いの失敗の影響を受けません。
-- API は最終更新者しか返さないため、人の更新の直後にボットが同じページを更新すると、人の更新は検知できません。ページの削除も検知しません。
+- 監視対象の「除外するユーザーID」の投稿や更新は除外します。エージェントの動作で起床が連鎖することを防ぐためです。
+- 初回は既存の内容を通知せず、確認位置だけを記録します。
+- API が失敗した場合は確認位置を進めないため、次回の Cron で再確認します。
 
 ## セットアップ
 
@@ -111,28 +108,16 @@ npm install
 
 ## シークレット
 
-設定値はすべて Worker のシークレットとして登録し、リポジトリには置きません。登録には `cf workers secrets update <名前> --worker doorbell` を使います。
-
-`TOPICS`、`TOPIC_WRITE_SECRETS`、`DISCORD_CHANNEL_ID`、`DISCORD_BOT_USER_ID`、`COSENSE_PROJECT`、`COSENSE_BOT_USER_ID` は、Durable Object の初回の移行で一度だけ `topics` と `sources` に取り込みます。移行の後にこれらの値を変更しても、動作には反映されません。
+認証情報は Worker のシークレットとして登録し、リポジトリには置きません。登録には `cf workers secrets update <名前> --worker doorbell --type secret_text --text <値>` を使います。
 
 | 名前 | 内容 |
 |---|---|
-| `TOPICS` | トピック名と opaque ID の対応。`[{"name":"discord-ietter","id":"推測困難なID"}]` 形式の JSON |
-| `TOPIC_WRITE_SECRETS` | 外部の producer 用の書き込みシークレット。`{"トピック名":"シークレット"}` 形式の JSON |
 | `READ_TOKEN` | `GET /events/{topic}` の読み取りトークン |
 | `SIGNAL_KEY` | `GET /signal/{signal_key}` の URL に使う推測困難な値 |
 | `DISCORD_BOT_TOKEN` | Discord ボットのトークン |
-| `DISCORD_CHANNEL_ID` | 監視するチャンネルのID |
-| `DISCORD_BOT_USER_ID` | 除外する自分のボットのユーザーID |
 | `COSENSE_PAT` | Cosense の Personal Access Token |
-| `COSENSE_PROJECT` | 監視する Cosense のプロジェクト名 |
-| `COSENSE_BOT_USER_ID` | 除外する自分のボットの Cosense ユーザーID |
 
-Worker 内蔵 producer しか使わないトピックは、`TOPIC_WRITE_SECRETS` に登録しません。登録がなければ外部から書き込めません。外部の producer がいない場合の値は `{}` です。
-
-## トピックを追加する
-
-移行の後は、シークレットの変更ではトピックを追加できません。トピックの追加は、管理ページ `doorbell-admin` で行います。
+トピックと監視対象の設定は Durable Object に保管し、管理ページで変更します。新しい環境では、どちらも空の状態から始まります。
 
 ## 管理ページ `doorbell-admin`
 
@@ -161,8 +146,7 @@ Worker 内蔵 producer しか使わないトピックは、`TOPIC_WRITE_SECRETS`
 | `src/discord.ts` | Discord の新着を確認する producer |
 | `src/cosense.ts` | Cosense のページ更新を確認する producer |
 | `src/auth.ts` | シークレットの定数時間比較 |
-| `src/config.ts` | `TOPICS` と `TOPIC_WRITE_SECRETS` の解析 |
-| `src/migration.ts` | スキーマ移行と旧シークレットの取り込み |
+| `src/schema.ts` | Durable Object のスキーマ |
 | `src/poll-error.ts` | `last_error` に記録してよいエラー |
 | `src/bridge-name.ts` | `doorbell` と `doorbell-admin` で共有する Durable Object の名前 |
 | `admin/src/index.ts` | 管理ページのルーティングと操作 |

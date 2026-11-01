@@ -8,8 +8,8 @@ import { DurableObject } from "cloudflare:workers";
 import { generateSecret, hashSecret } from "./auth.ts";
 import { verifyCosenseProject } from "./cosense.ts";
 import { verifyDiscordChannel } from "./discord.ts";
-import { migrateSchema } from "./migration.ts";
 import { describePollError } from "./poll-error.ts";
+import { createSchema } from "./schema.ts";
 
 /** トピックごとの保持件数 */
 const MAX_EVENTS_PER_TOPIC = 20;
@@ -118,7 +118,7 @@ type EventRow = {
 export class EventBridge extends DurableObject<Env> {
 	constructor(ctx: DurableObjectState, env: Env) {
 		super(ctx, env);
-		ctx.blockConcurrencyWhile(() => migrateSchema(ctx.storage, env));
+		createSchema(ctx.storage.sql);
 	}
 
 	/**

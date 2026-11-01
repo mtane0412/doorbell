@@ -6,7 +6,8 @@
 import { exports, env } from "cloudflare:workers";
 import { runInDurableObject } from "cloudflare:test";
 import type { EventBridge } from "../src/event-bridge.ts";
-import { migrateSchema } from "../src/migration.ts";
+import { hashSecret } from "../src/auth.ts";
+import { createSchema } from "../src/schema.ts";
 
 export const WRITABLE_TOPIC = "mac-script";
 export const INTERNAL_TOPIC = "discord-ietter";
@@ -57,11 +58,27 @@ export function dropAllTables(sql: SqlStorage): void {
 	`);
 }
 
-/** テスト間で状態が残らないよう、全テーブルを作り直してアラームを消す */
+/**
+ * テスト間で状態が残らないよう全テーブルを作り直し、共通の前提となるデータを入れ直す
+ *
+ * 前提: 内蔵 producer のトピックが2つ（監視対象あり）と、外部トピックが1つある。
+ */
 export async function resetBridge(): Promise<void> {
+	const writeSecretHash = await hashSecret(WRITE_SECRET);
 	await runInDurableObject(getBridge(), async (_instance, state) => {
-		dropAllTables(state.storage.sql);
-		await migrateSchema(state.storage, env);
+		const { sql } = state.storage;
+		dropAllTables(sql);
+		createSchema(sql);
+		sql.exec(
+			`INSERT INTO topics (name, opaque_id, seq, write_secret_hash) VALUES
+				('discord-ietter', 'topic-id-discord', 0, NULL),
+				('mac-script', 'topic-id-mac', 0, ?),
+				('cosense', 'topic-id-cosense', 0, NULL)`,
+			writeSecretHash,
+		);
+		sql.exec(`INSERT INTO sources (id, type, target, excluded_user_id, topic, enabled) VALUES
+			('discord', 'discord', '1000', '9999', 'discord-ietter', 1),
+			('cosense', 'cosense', 'test-project', 'user-id-tanehouse', 'cosense', 1)`);
 		await state.storage.deleteAlarm();
 	});
 }
