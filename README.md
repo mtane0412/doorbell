@@ -108,7 +108,7 @@ npm install
 
 ## シークレット
 
-認証情報は Worker のシークレットとして登録し、リポジトリには置きません。登録には `cf workers secrets update <名前> --worker doorbell --type secret_text --text <値>` を使います。
+認証情報は Worker のシークレットとして登録し、リポジトリには置きません。登録には `cf workers secrets update <名前> --worker doorbell` を使い、値は対話の入力で渡します。`--text` に値を書くと、シェルの履歴に残るためです。
 
 | 名前 | 内容 |
 |---|---|
