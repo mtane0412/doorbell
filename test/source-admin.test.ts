@@ -191,7 +191,7 @@ describe("監視対象の無効化と再開", () => {
 
 		await getBridge().resumeSource(sourceId);
 
-		const resumed = (await getBridge().getPollSources()).find((source) => source.id === sourceId);
+		const resumed = (await getBridge().getPollSources()).find((source) => source.topic === GARDEN_CHANNEL.topic);
 		expect(resumed).toMatchObject({ cursor: null, lastError: null });
 	});
 
@@ -211,7 +211,7 @@ describe("監視対象の無効化と再開", () => {
 		const sourceId = await addSourceAndGetId(GARDEN_CHANNEL);
 		await getBridge().disableSource(sourceId);
 
-		await getBridge().commitProducerPoll(sourceId, null, "600", {
+		await getBridge().commitProducerPoll(sourceId, "600", {
 			topic: GARDEN_CHANNEL.topic,
 			input: { kind: "discord.message", summary: "新着1件" },
 		});
@@ -220,7 +220,7 @@ describe("監視対象の無効化と再開", () => {
 		expect((await (await readEvents(0, GARDEN_CHANNEL.topic)).json()) as object).toMatchObject({ latest_seq: 0 });
 	});
 
-	it("確認の途中で無効化と再開が行われた場合は、古い確認の結果を記録しない", async () => {
+	it("確認位置がある状態で、確認の途中に無効化と再開が行われた場合は、古い確認の結果を記録しない", async () => {
 		// 前提: 確認位置 500 で確認を始めた後、API の応答を待つ間に無効化と再開が行われた
 		mockApisOk();
 		const sourceId = await addSourceAndGetId(GARDEN_CHANNEL);
@@ -228,30 +228,47 @@ describe("監視対象の無効化と再開", () => {
 		await getBridge().disableSource(sourceId);
 		await getBridge().resumeSource(sourceId);
 
-		await getBridge().commitProducerPoll(sourceId, "500", "600", {
+		await getBridge().commitProducerPoll(sourceId, "600", {
 			topic: GARDEN_CHANNEL.topic,
 			input: { kind: "discord.message", summary: "新着1件" },
 		});
 
-		// 検証: 再開で消した確認位置は書き戻されず、停止前の更新を通知しない
-		expect(await readCursor(sourceId)).toBeNull();
+		// 検証: 再開後の監視対象は確認位置を持たず、停止前の更新を通知しない
+		const resumed = (await getBridge().getPollSources()).find((source) => source.topic === GARDEN_CHANNEL.topic);
+		expect(resumed).toMatchObject({ cursor: null });
 		expect((await (await readEvents(0, GARDEN_CHANNEL.topic)).json()) as object).toMatchObject({ latest_seq: 0 });
 	});
 
-	it("確認を始めた時点から確認位置が変わっていなければ、結果を記録する", async () => {
-		// 前提: 確認位置 500 で確認を始め、その間に操作はなかった
+	it("初回の確認の途中に無効化と再開が行われた場合は、古い確認位置を記録しない", async () => {
+		// 前提: 確認位置がない状態で初回の確認を始めた後、API の応答を待つ間に無効化と再開が行われた
 		mockApisOk();
 		const sourceId = await addSourceAndGetId(GARDEN_CHANNEL);
-		await writeCursor(sourceId, "500");
+		await getBridge().disableSource(sourceId);
+		await getBridge().resumeSource(sourceId);
 
-		await getBridge().commitProducerPoll(sourceId, "500", "600", {
-			topic: GARDEN_CHANNEL.topic,
-			input: { kind: "discord.message", summary: "新着1件" },
-		});
+		await getBridge().commitProducerPoll(sourceId, "500", null);
 
-		// 検証: 確認位置が進み、イベントが1件追加される
-		expect(await readCursor(sourceId)).toBe("600");
-		expect((await (await readEvents(0, GARDEN_CHANNEL.topic)).json()) as object).toMatchObject({ latest_seq: 1 });
+		// 検証: 古い位置 500 を保存すると停止中の投稿が次回に通知されるため、確認位置は空のままである
+		const resumed = (await getBridge().getPollSources()).find((source) => source.topic === GARDEN_CHANNEL.topic);
+		expect(resumed).toMatchObject({ cursor: null });
+	});
+
+	it("再開後に始めた確認の結果は記録する", async () => {
+		// 前提: 無効化と再開の後、新しい確認で初回の位置を取得した
+		mockApisOk();
+		const sourceId = await addSourceAndGetId(GARDEN_CHANNEL);
+		await getBridge().disableSource(sourceId);
+		await getBridge().resumeSource(sourceId);
+		const resumed = (await getBridge().getPollSources()).find((source) => source.topic === GARDEN_CHANNEL.topic);
+		if (!resumed) {
+			throw new Error("再開した監視対象が確認対象にありません");
+		}
+
+		await getBridge().commitProducerPoll(resumed.id, "700", null);
+
+		// 検証: Cron が次に読む確認位置が 700 になる
+		const next = (await getBridge().getPollSources()).find((source) => source.topic === GARDEN_CHANNEL.topic);
+		expect(next).toMatchObject({ cursor: "700" });
 	});
 });
 
@@ -260,7 +277,7 @@ describe("監視対象の削除", () => {
 		mockApisOk();
 		const sourceId = await addSourceAndGetId(GARDEN_CHANNEL);
 		await writeCursor(sourceId, "500");
-		await getBridge().commitProducerPoll(sourceId, "500", "501", {
+		await getBridge().commitProducerPoll(sourceId, "501", {
 			topic: GARDEN_CHANNEL.topic,
 			input: { kind: "discord.message", summary: "新着1件" },
 		});

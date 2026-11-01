@@ -413,7 +413,8 @@ describe("操作", () => {
 
 		expect((await post("/sources/discord/resume")).status).toBe(303);
 		sources = await getBridge().getPollSources();
-		expect(sources.map((source) => source.id)).toContain("discord");
+		// 再開すると ID は振り直されるため、トピック名で確認対象に戻ったことを確かめる
+		expect(sources.map((source) => source.topic)).toContain("discord-ietter");
 	});
 
 	it("監視対象を削除できる", async () => {

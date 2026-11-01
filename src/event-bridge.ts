@@ -208,12 +208,17 @@ export class EventBridge extends DurableObject<Env> {
 	 * 無効の監視対象を再開する
 	 *
 	 * 停止中の更新で不要な起床を起こさないよう、確認位置を消して初回と同じ扱いにする。
+	 * ID も振り直す。再開前に始まった確認の結果は古い ID を指すため、commitProducerPoll で捨てられる。
 	 * 有効な監視対象には何もしない。二重送信で稼働中の確認位置を消さないためである。
 	 */
 	async resumeSource(sourceId: string): Promise<void> {
 		this.ctx.storage.transactionSync(() => {
 			const resumed = this.ctx.storage.sql
-				.exec("UPDATE sources SET enabled = 1, last_error = NULL WHERE id = ? AND enabled = 0 RETURNING id", sourceId)
+				.exec(
+					"UPDATE sources SET id = ?, enabled = 1, last_error = NULL WHERE id = ? AND enabled = 0 RETURNING id",
+					crypto.randomUUID(),
+					sourceId,
+				)
 				.toArray();
 			if (resumed.length > 0) {
 				this.ctx.storage.sql.exec("DELETE FROM producer_state WHERE producer = ?", sourceId);
@@ -374,13 +379,10 @@ export class EventBridge extends DurableObject<Env> {
 	 *
 	 * 片方だけが成功すると、イベントの重複や取りこぼしになるためである。
 	 *
-	 * @param expectedCursor 確認を始めた時点の確認位置。未記録なら null
-	 * @param cursor 新しい確認位置
 	 * @param event 追加するイベント。新着がなければ null
 	 */
 	async commitProducerPoll(
 		producer: string,
-		expectedCursor: string | null,
 		cursor: string,
 		event: { topic: string; input: EventInput } | null,
 	): Promise<void> {
@@ -388,14 +390,6 @@ export class EventBridge extends DurableObject<Env> {
 		const isActive =
 			this.ctx.storage.sql.exec("SELECT 1 FROM sources WHERE id = ? AND enabled = 1", producer).toArray().length > 0;
 		if (!isActive) {
-			return;
-		}
-		// 応答を待つ間に無効化と再開が行われると、有効のままでも確認位置が消えている。再開前の結果を書き戻さないよう捨てる
-		const currentCursor =
-			this.ctx.storage.sql
-				.exec<{ cursor: string }>("SELECT cursor FROM producer_state WHERE producer = ?", producer)
-				.toArray()[0]?.cursor ?? null;
-		if (currentCursor !== expectedCursor) {
 			return;
 		}
 		this.ctx.storage.transactionSync(() => {

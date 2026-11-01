@@ -77,7 +77,7 @@ export async function pollDiscord(
 	if (source.cursor === null) {
 		const [latest] = await fetchMessages(env, source.target, "limit=1");
 		if (latest) {
-			await bridge.commitProducerPoll(source.id, source.cursor, latest.id, null);
+			await bridge.commitProducerPoll(source.id, latest.id, null);
 		}
 		return;
 	}
@@ -97,5 +97,5 @@ export async function pollDiscord(
 				data: { count: fromOthers.length, channel_id: source.target },
 			}
 		: null;
-	await bridge.commitProducerPoll(source.id, source.cursor, newest.id, input ? { topic: source.topic, input } : null);
+	await bridge.commitProducerPoll(source.id, newest.id, input ? { topic: source.topic, input } : null);
 }

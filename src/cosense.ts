@@ -96,7 +96,7 @@ export async function pollCosense(
 		return;
 	}
 	if (source.cursor === null) {
-		await bridge.commitProducerPoll(source.id, source.cursor, String(newest.updated), null);
+		await bridge.commitProducerPoll(source.id, String(newest.updated), null);
 		return;
 	}
 
@@ -114,5 +114,5 @@ export async function pollCosense(
 				data: { count: fromOthers.length, project: source.target },
 			}
 		: null;
-	await bridge.commitProducerPoll(source.id, source.cursor, String(newest.updated), input ? { topic: source.topic, input } : null);
+	await bridge.commitProducerPoll(source.id, String(newest.updated), input ? { topic: source.topic, input } : null);
 }
