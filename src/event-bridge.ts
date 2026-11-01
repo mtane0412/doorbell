@@ -208,12 +208,17 @@ export class EventBridge extends DurableObject<Env> {
 	 * 無効の監視対象を再開する
 	 *
 	 * 停止中の更新で不要な起床を起こさないよう、確認位置を消して初回と同じ扱いにする。
+	 * ID も振り直す。再開前に始まった確認の結果は古い ID を指すため、commitProducerPoll で捨てられる。
 	 * 有効な監視対象には何もしない。二重送信で稼働中の確認位置を消さないためである。
 	 */
 	async resumeSource(sourceId: string): Promise<void> {
 		this.ctx.storage.transactionSync(() => {
 			const resumed = this.ctx.storage.sql
-				.exec("UPDATE sources SET enabled = 1, last_error = NULL WHERE id = ? AND enabled = 0 RETURNING id", sourceId)
+				.exec(
+					"UPDATE sources SET id = ?, enabled = 1, last_error = NULL WHERE id = ? AND enabled = 0 RETURNING id",
+					crypto.randomUUID(),
+					sourceId,
+				)
 				.toArray();
 			if (resumed.length > 0) {
 				this.ctx.storage.sql.exec("DELETE FROM producer_state WHERE producer = ?", sourceId);

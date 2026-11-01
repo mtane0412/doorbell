@@ -1,7 +1,7 @@
 /**
  * Discord チャンネルの新着を REST で確認し、イベントとして記録する producer
  *
- * イベントには件数と最新メッセージIDだけを載せ、本文は載せない。
+ * イベントには件数と最新メッセージID、チャンネルIDだけを載せ、本文は載せない。
  * 自分のボットの投稿を除外し、エージェントの返信で起床が連鎖することを防ぐ。
  */
 import type { EventBridge, EventInput, PollSource } from "./event-bridge.ts";
